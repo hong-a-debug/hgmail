@@ -1,0 +1,18 @@
+{
+  "name": "my-email-worker",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:no-bundle": "wrangler deploy --no-bundle"
+  },
+  "dependencies": {
+    "postal-mime": "^2.0.0",
+    "resend": "^4.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260101.0",
+    "typescript": "^5.7.3",
+    "wrangler": "^4.0.0"
+  }
+}

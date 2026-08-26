@@ -1,0 +1,11 @@
+name = "my-email-worker"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+DOMAIN = "你的域名"
+
+[[kv_namespaces]]
+binding = "EMAIL"
+id = "你的id"
