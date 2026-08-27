@@ -2,7 +2,7 @@ import { Env, StoredEmail } from './types';
 import { parseEmail } from './email-parser';
 import { sendAutoReply, sendEmail } from './resend-client';
 
-// ===== HTML 前端模板（完整版） =====
+// ===== HTML 前端模板 =====
 const HTML_TEMPLATE = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -297,6 +297,41 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             animation: spin 0.7s linear infinite;
         }
         @keyframes spin { to { transform: rotate(360deg); } }
+
+        .mode-toggle {
+            display: flex;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        .mode-toggle button {
+            padding: 2px 14px;
+            border-radius: 4px;
+            border: 1px solid #ccc;
+            background: #fff;
+            color: #333;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.15s;
+        }
+        .mode-toggle button.active {
+            background: #667eea;
+            color: #fff;
+            border-color: #667eea;
+        }
+        .mode-toggle button:hover { opacity: 0.8; }
+        .preview-box {
+            display: none;
+            min-height: 120px;
+            padding: 12px;
+            border: 2px solid #e8ecf4;
+            border-radius: 10px;
+            background: #fafbfc;
+            overflow-y: auto;
+            line-height: 1.7;
+        }
+        .preview-box.show { display: block; }
+        .compose-textarea { display: block; }
+        .compose-textarea.hide { display: none; }
     </style>
 </head>
 <body>
@@ -354,8 +389,15 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         <input id="composeTo" placeholder="someone@example.com" />
         <label>主题</label>
         <input id="composeSubject" placeholder="邮件主题" />
-        <label>内容</label>
-        <textarea id="composeHtml" placeholder="邮件内容（支持 HTML）"></textarea>
+        <label>
+            <span>内容</span>
+            <span class="mode-toggle">
+                <button id="srcBtn" class="active" onclick="setComposeMode('src')">源码</button>
+                <button id="previewBtn" onclick="setComposeMode('preview')">预览</button>
+            </span>
+        </label>
+        <textarea id="composeHtml" class="compose-textarea" placeholder="邮件内容（支持 HTML）"></textarea>
+        <div id="composePreview" class="preview-box"></div>
         <button class="send-btn" id="composeSendBtn" onclick="sendCompose()">📤 发送</button>
     </div>
 </div>
@@ -390,6 +432,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 let mails = [];
 let currentViewId = null;
 let refreshInterval = null;
+let composeMode = 'src';
 
 const $ = id => document.getElementById(id);
 const mailListEl = $('mailList');
@@ -403,6 +446,35 @@ function showToast(msg, isError = false) {
     t._hide = setTimeout(() => t.classList.remove('show'), 3000);
 }
 
+// ===== 源码/预览模式切换 =====
+function setComposeMode(mode) {
+    composeMode = mode;
+    const srcBtn = $('srcBtn');
+    const previewBtn = $('previewBtn');
+    const textarea = $('composeHtml');
+    const preview = $('composePreview');
+
+    if (mode === 'src') {
+        srcBtn.className = 'active';
+        previewBtn.className = '';
+        textarea.className = 'compose-textarea';
+        preview.className = 'preview-box';
+        // 预览内容同步到 textarea
+        if (preview.innerHTML && preview.innerHTML !== '（空内容）') {
+            textarea.value = preview.innerHTML;
+        }
+    } else {
+        previewBtn.className = 'active';
+        srcBtn.className = '';
+        textarea.className = 'compose-textarea hide';
+        preview.className = 'preview-box show';
+        // 渲染内容
+        const val = textarea.value.trim();
+        preview.innerHTML = val || '（空内容）';
+    }
+}
+
+// ===== 加载邮件列表 =====
 async function loadMails() {
     try {
         const resp = await fetch('/mails');
@@ -427,7 +499,7 @@ function renderMails() {
         return;
     }
     mailListEl.innerHTML = mails.map(m => \`
-        <div class="mail-item" onclick="viewMail('\${m.id}')">
+        <div class="mail-item" onclick="viewMail('\${encodeURIComponent(m.id)}')">
             <div class="avatar">\${(m.from || '?')[0].toUpperCase()}</div>
             <div class="info">
                 <div class="from">\${escapeHtml(m.from)}</div>
@@ -446,10 +518,11 @@ function updateStats() {
     $('repliedCount').textContent = mails.filter(m => m.status === 'replied').length;
 }
 
+// ===== 查看邮件 =====
 async function viewMail(id) {
     currentViewId = id;
     try {
-        const resp = await fetch('/mail/' + id);
+        const resp = await fetch('/mail/' + encodeURIComponent(id));
         if (!resp.ok) throw new Error('加载失败');
         const mail = await resp.json();
         $('viewSubject').textContent = mail.subject || '(无主题)';
@@ -474,7 +547,8 @@ function replyFromView() {
     closeView();
     $('composeTo').value = mail.from;
     $('composeSubject').value = 'Re: ' + (mail.subject || '');
-    $('composeHtml').value = \`\\n\\n--- 原始邮件 ---\\n\${mail.text || ''}\`;
+    $('composeHtml').value = '\\n\\n--- 原始邮件 ---\\n' + (mail.text || '');
+    setComposeMode('src');
     $('composeModal').classList.add('active');
 }
 
@@ -482,7 +556,7 @@ async function deleteFromView() {
     if (!currentViewId) return;
     if (!confirm('确定要删除这封邮件吗？')) return;
     try {
-        const resp = await fetch('/mail/' + currentViewId, { method: 'DELETE' });
+        const resp = await fetch('/mail/' + encodeURIComponent(currentViewId), { method: 'DELETE' });
         if (!resp.ok) throw new Error('删除失败');
         showToast('已删除');
         closeView();
@@ -492,10 +566,13 @@ async function deleteFromView() {
     }
 }
 
+// ===== 写邮件 =====
 function openCompose() {
     $('composeTo').value = '';
     $('composeSubject').value = '';
     $('composeHtml').value = '';
+    $('composePreview').innerHTML = '';
+    setComposeMode('src');
     $('composeModal').classList.add('active');
 }
 
@@ -506,7 +583,17 @@ function closeCompose() {
 async function sendCompose() {
     const to = $('composeTo').value.trim();
     const subject = $('composeSubject').value.trim();
+    
+    // 如果当前是预览模式，把预览内容同步回 textarea
+    if (composeMode === 'preview') {
+        const previewContent = $('composePreview').innerHTML;
+        if (previewContent && previewContent !== '（空内容）') {
+            $('composeHtml').value = previewContent;
+        }
+    }
+    
     const html = $('composeHtml').value.trim();
+    
     if (!to || !subject || !html) {
         showToast('请填写完整信息', true);
         return;
@@ -524,6 +611,7 @@ async function sendCompose() {
         if (!resp.ok) throw new Error(data.error || '发送失败');
         showToast('✅ 邮件已发送 (ID: ' + data.id + ')');
         closeCompose();
+        loadMails();
     } catch (e) {
         showToast('发送失败: ' + e.message, true);
     } finally {
@@ -532,6 +620,7 @@ async function sendCompose() {
     }
 }
 
+// ===== 工具函数 =====
 function escapeHtml(str) {
     if (!str) return '';
     const div = document.createElement('div');
@@ -555,6 +644,7 @@ async function loadDomain() {
     } catch { domainBadge.textContent = '📧 未知域名'; }
 }
 
+// ===== 初始化 =====
 loadDomain();
 loadMails();
 refreshInterval = setInterval(loadMails, 30000);
@@ -570,15 +660,19 @@ document.querySelectorAll('.modal-overlay').forEach(el => {
 </body>
 </html>`;
 
+// ============================================================
+// Worker 主入口
+// ============================================================
+
 export default {
     async email(message: EmailMessage, env: Env, ctx: ExecutionContext) {
         console.log(`📨 收到邮件: from=${message.from}, to=${message.to}`);
-        
+
         try {
             const raw = await new Response(message.raw).arrayBuffer();
             const parsed = await parseEmail(raw);
             const messageId = message.headers.get('Message-ID') || crypto.randomUUID();
-            
+
             const emailData: StoredEmail = {
                 id: messageId,
                 from: parsed.from,
@@ -589,11 +683,13 @@ export default {
                 html: parsed.html,
                 status: 'received',
             };
-            
+
+            // 存储邮件
             await env.EMAIL.put(messageId, JSON.stringify(emailData), {
-                expirationTtl: 30 * 24 * 60 * 60
+                expirationTtl: 30 * 24 * 60 * 60,
             });
-            
+
+            // 维护邮件 ID 列表
             const idsJson = await env.EMAIL.get('_mail_ids');
             let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
             ids.push(messageId);
@@ -605,17 +701,19 @@ export default {
                 ids = ids.slice(-500);
             }
             await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
-            
+
+            // 发送自动回复
             await sendAutoReply(
                 env.RESEND_API_KEY,
                 env.DOMAIN,
                 parsed.from,
                 parsed.subject
             );
-            
+
+            // 更新状态
             const updated = { ...emailData, status: 'replied' as const };
             await env.EMAIL.put(messageId, JSON.stringify(updated));
-            
+
             console.log(`✅ 邮件已存储并回复`);
         } catch (error) {
             console.error('❌ 处理邮件失败:', error);
@@ -626,16 +724,19 @@ export default {
         const url = new URL(request.url);
         const path = url.pathname;
 
+        // 首页
         if (path === '/' || path === '') {
             return new Response(HTML_TEMPLATE, {
-                headers: { 'Content-Type': 'text/html; charset=utf-8' }
+                headers: { 'Content-Type': 'text/html; charset=utf-8' },
             });
         }
 
+        // 获取域名
         if (path === '/domain') {
             return Response.json({ domain: env.DOMAIN });
         }
 
+        // 获取邮件列表
         if (path === '/mails' && request.method === 'GET') {
             const idsJson = await env.EMAIL.get('_mail_ids');
             const ids: string[] = idsJson ? JSON.parse(idsJson) : [];
@@ -646,15 +747,18 @@ export default {
                 if (data) {
                     try {
                         mails.push(JSON.parse(data));
-                    } catch { /* ignore */ }
+                    } catch {
+                        // ignore
+                    }
                 }
             }
             return Response.json({ mails });
         }
 
+        // 发送邮件
         if (path === '/send' && request.method === 'POST') {
             try {
-                const body = await request.json() as {
+                const body = (await request.json()) as {
                     to: string | string[];
                     subject: string;
                     html: string;
@@ -677,6 +781,7 @@ export default {
             }
         }
 
+        // 获取单封邮件（URL 解码）
         if (path.startsWith('/mail/') && request.method === 'GET') {
             const id = decodeURIComponent(path.split('/')[2]);
             if (!id) {
@@ -689,6 +794,7 @@ export default {
             return Response.json(JSON.parse(data));
         }
 
+        // 删除邮件（URL 解码）
         if (path.startsWith('/mail/') && request.method === 'DELETE') {
             const id = decodeURIComponent(path.split('/')[2]);
             if (!id) {
@@ -696,12 +802,12 @@ export default {
             }
             const idsJson = await env.EMAIL.get('_mail_ids');
             let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
-            ids = ids.filter(i => i !== id);
+            ids = ids.filter((i) => i !== id);
             await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
             await env.EMAIL.delete(id);
             return Response.json({ success: true });
         }
 
         return Response.json({ error: '未找到该路由' }, { status: 404 });
-    }
+    },
 };
