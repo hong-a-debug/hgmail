@@ -73,7 +73,7 @@ npx wrangler secret put RESEND_API_KEY
 
 ```toml
 [vars]
-DOMAIN = "yourdomain.com"
+DOMAIN = "你的域名"
 ```
 
 ### 第五步：部署
