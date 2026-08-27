@@ -203,7 +203,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         .modal {
             background: white;
             border-radius: 20px;
-            max-width: 600px;
+            max-width: 700px;
             width: 95%;
             max-height: 90vh;
             overflow-y: auto;
@@ -239,7 +239,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             margin-bottom: 4px;
             color: #555;
         }
-        .modal input, .modal textarea {
+        .modal input {
             width: 100%;
             padding: 10px 14px;
             border: 2px solid #e8ecf4;
@@ -248,11 +248,10 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             font-family: inherit;
             transition: border-color 0.15s;
         }
-        .modal input:focus, .modal textarea:focus {
+        .modal input:focus {
             outline: none;
             border-color: #667eea;
         }
-        .modal textarea { min-height: 120px; resize: vertical; }
         .modal .send-btn {
             margin-top: 20px;
             width: 100%;
@@ -298,6 +297,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        /* ===== 模式切换按钮 ===== */
         .mode-toggle {
             display: flex;
             gap: 8px;
@@ -319,19 +319,90 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             border-color: #667eea;
         }
         .mode-toggle button:hover { opacity: 0.8; }
-        .preview-box {
+
+        /* ===== 源码模式：左右分栏 ===== */
+        .editor-split {
             display: none;
-            min-height: 120px;
+            gap: 12px;
+            min-height: 200px;
+        }
+        .editor-split.show {
+            display: flex;
+        }
+        .editor-split .left {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .editor-split .left textarea {
+            flex: 1;
+            min-height: 180px;
+            padding: 10px 14px;
+            border: 2px solid #e8ecf4;
+            border-radius: 10px;
+            font-size: 14px;
+            font-family: 'Courier New', monospace;
+            resize: vertical;
+            transition: border-color 0.15s;
+        }
+        .editor-split .left textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .editor-split .right {
+            flex: 1;
+            min-height: 180px;
             padding: 12px;
             border: 2px solid #e8ecf4;
             border-radius: 10px;
             background: #fafbfc;
             overflow-y: auto;
             line-height: 1.7;
+            word-wrap: break-word;
         }
-        .preview-box.show { display: block; }
-        .compose-textarea { display: block; }
-        .compose-textarea.hide { display: none; }
+        .editor-split .right .empty-hint {
+            color: #bbb;
+            font-size: 14px;
+        }
+
+        /* ===== 文本模式：纯文本输入 ===== */
+        .editor-text {
+            display: none;
+            min-height: 150px;
+        }
+        .editor-text.show {
+            display: block;
+        }
+        .editor-text textarea {
+            width: 100%;
+            min-height: 150px;
+            padding: 10px 14px;
+            border: 2px solid #e8ecf4;
+            border-radius: 10px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+            transition: border-color 0.15s;
+        }
+        .editor-text textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .editor-label {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 16px;
+            margin-bottom: 4px;
+        }
+        .editor-label label {
+            margin-top: 0;
+            margin-bottom: 0;
+        }
+        .editor-label .mode-toggle {
+            margin-top: 0;
+        }
     </style>
 </head>
 <body>
@@ -378,31 +449,48 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     </div>
 </div>
 
-<!-- 写邮件弹窗 -->
+<!-- ===== 写邮件弹窗 ===== -->
 <div class="modal-overlay" id="composeModal">
     <div class="modal">
         <div class="modal-header">
             <h3>✏️ 写邮件</h3>
             <button class="modal-close" onclick="closeCompose()">×</button>
         </div>
+
         <label>收件人</label>
         <input id="composeTo" placeholder="someone@example.com" />
+
         <label>主题</label>
         <input id="composeSubject" placeholder="邮件主题" />
-        <label>
-            <span>内容</span>
+
+        <div class="editor-label">
+            <label>内容</label>
             <span class="mode-toggle">
-                <button id="srcBtn" class="active" onclick="setComposeMode('src')">源码</button>
-                <button id="previewBtn" onclick="setComposeMode('preview')">预览</button>
+                <button id="srcBtn" class="active" onclick="setEditorMode('src')">源码</button>
+                <button id="textBtn" onclick="setEditorMode('text')">文本</button>
             </span>
-        </label>
-        <textarea id="composeHtml" class="compose-textarea" placeholder="邮件内容（支持 HTML）"></textarea>
-        <div id="composePreview" class="preview-box"></div>
+        </div>
+
+        <!-- 源码模式：左右分栏 -->
+        <div id="editorSplit" class="editor-split show">
+            <div class="left">
+                <textarea id="composeHtml" placeholder="写 HTML 邮件内容...&#10;例如：&lt;p&gt;你好！&lt;/p&gt;"></textarea>
+            </div>
+            <div class="right" id="composePreview">
+                <span class="empty-hint">👈 左边写内容，这里实时预览</span>
+            </div>
+        </div>
+
+        <!-- 文本模式：纯文本输入 -->
+        <div id="editorText" class="editor-text">
+            <textarea id="composeText" placeholder="写纯文本邮件内容...&#10;不支持 HTML 标签"></textarea>
+        </div>
+
         <button class="send-btn" id="composeSendBtn" onclick="sendCompose()">📤 发送</button>
     </div>
 </div>
 
-<!-- 查看邮件弹窗 -->
+<!-- ===== 查看邮件弹窗 ===== -->
 <div class="modal-overlay" id="viewModal">
     <div class="modal" style="max-width: 700px;">
         <div class="modal-header">
@@ -429,15 +517,21 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 <div class="toast" id="toast"></div>
 
 <script>
+// ============================================================
+// 状态
+// ============================================================
 let mails = [];
 let currentViewId = null;
 let refreshInterval = null;
-let composeMode = 'src';
+let editorMode = 'src'; // 'src' 或 'text'
 
 const $ = id => document.getElementById(id);
 const mailListEl = $('mailList');
 const domainBadge = $('domainBadge');
 
+// ============================================================
+// Toast
+// ============================================================
 function showToast(msg, isError = false) {
     const t = $('toast');
     t.textContent = msg;
@@ -446,35 +540,66 @@ function showToast(msg, isError = false) {
     t._hide = setTimeout(() => t.classList.remove('show'), 3000);
 }
 
-// ===== 源码/预览模式切换 =====
-function setComposeMode(mode) {
-    composeMode = mode;
+// ============================================================
+// 编辑器模式切换
+// ============================================================
+function setEditorMode(mode) {
+    editorMode = mode;
     const srcBtn = $('srcBtn');
-    const previewBtn = $('previewBtn');
-    const textarea = $('composeHtml');
-    const preview = $('composePreview');
+    const textBtn = $('textBtn');
+    const split = $('editorSplit');
+    const textEditor = $('editorText');
 
     if (mode === 'src') {
         srcBtn.className = 'active';
-        previewBtn.className = '';
-        textarea.className = 'compose-textarea';
-        preview.className = 'preview-box';
-        // 预览内容同步到 textarea
-        if (preview.innerHTML && preview.innerHTML !== '（空内容）') {
-            textarea.value = preview.innerHTML;
+        textBtn.className = '';
+        split.className = 'editor-split show';
+        textEditor.className = 'editor-text';
+        // 把文本模式的内容同步到源码模式
+        const textVal = $('composeText').value;
+        if (textVal) {
+            $('composeHtml').value = textVal.replace(/\n/g, '<br>');
+            updatePreview();
         }
     } else {
-        previewBtn.className = 'active';
+        textBtn.className = 'active';
         srcBtn.className = '';
-        textarea.className = 'compose-textarea hide';
-        preview.className = 'preview-box show';
-        // 渲染内容
-        const val = textarea.value.trim();
-        preview.innerHTML = val || '（空内容）';
+        split.className = 'editor-split';
+        textEditor.className = 'editor-text show';
+        // 把源码模式的内容转成纯文本（去掉 HTML 标签）
+        const htmlVal = $('composeHtml').value;
+        if (htmlVal) {
+            const div = document.createElement('div');
+            div.innerHTML = htmlVal;
+            $('composeText').value = div.textContent || '';
+        }
     }
 }
 
-// ===== 加载邮件列表 =====
+// ============================================================
+// 源码模式实时预览
+// ============================================================
+function updatePreview() {
+    const html = $('composeHtml').value;
+    const preview = $('composePreview');
+    if (html.trim()) {
+        preview.innerHTML = html;
+    } else {
+        preview.innerHTML = '<span class="empty-hint">👈 左边写内容，这里实时预览</span>';
+    }
+}
+
+// 绑定实时预览事件
+document.addEventListener('DOMContentLoaded', function() {
+    const textarea = $('composeHtml');
+    if (textarea) {
+        textarea.addEventListener('input', updatePreview);
+    }
+});
+
+// ============================================================
+// 加载邮件列表
+// ============================================================
 async function loadMails() {
     try {
         const resp = await fetch('/mails');
@@ -518,7 +643,9 @@ function updateStats() {
     $('repliedCount').textContent = mails.filter(m => m.status === 'replied').length;
 }
 
-// ===== 查看邮件 =====
+// ============================================================
+// 查看邮件
+// ============================================================
 async function viewMail(id) {
     currentViewId = id;
     try {
@@ -547,8 +674,10 @@ function replyFromView() {
     closeView();
     $('composeTo').value = mail.from;
     $('composeSubject').value = 'Re: ' + (mail.subject || '');
-    $('composeHtml').value = '\\n\\n--- 原始邮件 ---\\n' + (mail.text || '');
-    setComposeMode('src');
+    // 默认用源码模式
+    setEditorMode('src');
+    $('composeHtml').value = '<br><br>--- 原始邮件 ---<br>' + (mail.text || '').replace(/\n/g, '<br>');
+    updatePreview();
     $('composeModal').classList.add('active');
 }
 
@@ -566,13 +695,16 @@ async function deleteFromView() {
     }
 }
 
-// ===== 写邮件 =====
+// ============================================================
+// 写邮件
+// ============================================================
 function openCompose() {
     $('composeTo').value = '';
     $('composeSubject').value = '';
     $('composeHtml').value = '';
-    $('composePreview').innerHTML = '';
-    setComposeMode('src');
+    $('composeText').value = '';
+    setEditorMode('src');
+    updatePreview();
     $('composeModal').classList.add('active');
 }
 
@@ -583,24 +715,29 @@ function closeCompose() {
 async function sendCompose() {
     const to = $('composeTo').value.trim();
     const subject = $('composeSubject').value.trim();
-    
-    // 如果当前是预览模式，把预览内容同步回 textarea
-    if (composeMode === 'preview') {
-        const previewContent = $('composePreview').innerHTML;
-        if (previewContent && previewContent !== '（空内容）') {
-            $('composeHtml').value = previewContent;
-        }
+
+    let html = '';
+    if (editorMode === 'src') {
+        html = $('composeHtml').value.trim();
+    } else {
+        // 文本模式：转义 + 换行转 <br>
+        const text = $('composeText').value.trim();
+        html = text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/\n/g, '<br>');
     }
-    
-    const html = $('composeHtml').value.trim();
-    
+
     if (!to || !subject || !html) {
         showToast('请填写完整信息', true);
         return;
     }
+
     const btn = $('composeSendBtn');
     btn.disabled = true;
     btn.innerHTML = '<span class="loading-spinner"></span> 发送中...';
+
     try {
         const resp = await fetch('/send', {
             method: 'POST',
@@ -620,7 +757,9 @@ async function sendCompose() {
     }
 }
 
-// ===== 工具函数 =====
+// ============================================================
+// 工具函数
+// ============================================================
 function escapeHtml(str) {
     if (!str) return '';
     const div = document.createElement('div');
@@ -644,7 +783,9 @@ async function loadDomain() {
     } catch { domainBadge.textContent = '📧 未知域名'; }
 }
 
-// ===== 初始化 =====
+// ============================================================
+// 初始化
+// ============================================================
 loadDomain();
 loadMails();
 refreshInterval = setInterval(loadMails, 30000);
@@ -684,12 +825,10 @@ export default {
                 status: 'received',
             };
 
-            // 存储邮件
             await env.EMAIL.put(messageId, JSON.stringify(emailData), {
                 expirationTtl: 30 * 24 * 60 * 60,
             });
 
-            // 维护邮件 ID 列表
             const idsJson = await env.EMAIL.get('_mail_ids');
             let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
             ids.push(messageId);
@@ -702,7 +841,6 @@ export default {
             }
             await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
 
-            // 发送自动回复
             await sendAutoReply(
                 env.RESEND_API_KEY,
                 env.DOMAIN,
@@ -710,7 +848,6 @@ export default {
                 parsed.subject
             );
 
-            // 更新状态
             const updated = { ...emailData, status: 'replied' as const };
             await env.EMAIL.put(messageId, JSON.stringify(updated));
 
@@ -724,19 +861,16 @@ export default {
         const url = new URL(request.url);
         const path = url.pathname;
 
-        // 首页
         if (path === '/' || path === '') {
             return new Response(HTML_TEMPLATE, {
                 headers: { 'Content-Type': 'text/html; charset=utf-8' },
             });
         }
 
-        // 获取域名
         if (path === '/domain') {
             return Response.json({ domain: env.DOMAIN });
         }
 
-        // 获取邮件列表
         if (path === '/mails' && request.method === 'GET') {
             const idsJson = await env.EMAIL.get('_mail_ids');
             const ids: string[] = idsJson ? JSON.parse(idsJson) : [];
@@ -755,7 +889,6 @@ export default {
             return Response.json({ mails });
         }
 
-        // 发送邮件
         if (path === '/send' && request.method === 'POST') {
             try {
                 const body = (await request.json()) as {
@@ -781,7 +914,6 @@ export default {
             }
         }
 
-        // 获取单封邮件（URL 解码）
         if (path.startsWith('/mail/') && request.method === 'GET') {
             const id = decodeURIComponent(path.split('/')[2]);
             if (!id) {
@@ -794,7 +926,6 @@ export default {
             return Response.json(JSON.parse(data));
         }
 
-        // 删除邮件（URL 解码）
         if (path.startsWith('/mail/') && request.method === 'DELETE') {
             const id = decodeURIComponent(path.split('/')[2]);
             if (!id) {
