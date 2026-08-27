@@ -297,37 +297,12 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* ===== 模式切换按钮 ===== */
-        .mode-toggle {
-            display: flex;
-            gap: 8px;
-            margin-top: 4px;
-        }
-        .mode-toggle button {
-            padding: 2px 14px;
-            border-radius: 4px;
-            border: 1px solid #ccc;
-            background: #fff;
-            color: #333;
-            cursor: pointer;
-            font-size: 12px;
-            transition: all 0.15s;
-        }
-        .mode-toggle button.active {
-            background: #667eea;
-            color: #fff;
-            border-color: #667eea;
-        }
-        .mode-toggle button:hover { opacity: 0.8; }
-
         /* ===== 源码模式：左右分栏 ===== */
         .editor-split {
-            display: none;
+            display: flex;
             gap: 12px;
             min-height: 200px;
-        }
-        .editor-split.show {
-            display: flex;
+            margin-top: 4px;
         }
         .editor-split .left {
             flex: 1;
@@ -359,36 +334,15 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             overflow-y: auto;
             line-height: 1.7;
             word-wrap: break-word;
+            outline: none;
+        }
+        .editor-split .right:focus {
+            border-color: #667eea;
         }
         .editor-split .right .empty-hint {
             color: #bbb;
             font-size: 14px;
         }
-
-        /* ===== 文本模式：纯文本输入 ===== */
-        .editor-text {
-            display: none;
-            min-height: 150px;
-        }
-        .editor-text.show {
-            display: block;
-        }
-        .editor-text textarea {
-            width: 100%;
-            min-height: 150px;
-            padding: 10px 14px;
-            border: 2px solid #e8ecf4;
-            border-radius: 10px;
-            font-size: 14px;
-            font-family: inherit;
-            resize: vertical;
-            transition: border-color 0.15s;
-        }
-        .editor-text textarea:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-
         .editor-label {
             display: flex;
             justify-content: space-between;
@@ -400,8 +354,9 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             margin-top: 0;
             margin-bottom: 0;
         }
-        .editor-label .mode-toggle {
-            margin-top: 0;
+        .editor-label .hint {
+            font-size: 12px;
+            color: #999;
         }
     </style>
 </head>
@@ -465,25 +420,17 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 
         <div class="editor-label">
             <label>内容</label>
-            <span class="mode-toggle">
-                <button id="srcBtn" class="active" onclick="setEditorMode('src')">源码</button>
-                <button id="textBtn" onclick="setEditorMode('text')">文本</button>
-            </span>
+            <span class="hint">← 源码 | 预览 → (右边可直接编辑)</span>
         </div>
 
-        <!-- 源码模式：左右分栏 -->
-        <div id="editorSplit" class="editor-split show">
+        <!-- 左右分栏 -->
+        <div class="editor-split">
             <div class="left">
-                <textarea id="composeHtml" placeholder="写 HTML 邮件内容...&#10;例如：&lt;p&gt;你好！&lt;/p&gt;"></textarea>
+                <textarea id="composeHtml" placeholder="写 HTML 源码..."></textarea>
             </div>
-            <div class="right" id="composePreview">
-                <span class="empty-hint">👈 左边写内容，这里实时预览</span>
+            <div class="right" id="composePreview" contenteditable="true">
+                <span class="empty-hint">👈 左边写源码，或直接在右边编辑文字</span>
             </div>
-        </div>
-
-        <!-- 文本模式：纯文本输入 -->
-        <div id="editorText" class="editor-text">
-            <textarea id="composeText" placeholder="写纯文本邮件内容...&#10;不支持 HTML 标签"></textarea>
         </div>
 
         <button class="send-btn" id="composeSendBtn" onclick="sendCompose()">📤 发送</button>
@@ -523,7 +470,6 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 let mails = [];
 let currentViewId = null;
 let refreshInterval = null;
-let editorMode = 'src'; // 'src' 或 'text'
 
 const $ = id => document.getElementById(id);
 const mailListEl = $('mailList');
@@ -541,61 +487,28 @@ function showToast(msg, isError = false) {
 }
 
 // ============================================================
-// 编辑器模式切换
+// 左右双向同步
 // ============================================================
-function setEditorMode(mode) {
-    editorMode = mode;
-    const srcBtn = $('srcBtn');
-    const textBtn = $('textBtn');
-    const split = $('editorSplit');
-    const textEditor = $('editorText');
-
-    if (mode === 'src') {
-        srcBtn.className = 'active';
-        textBtn.className = '';
-        split.className = 'editor-split show';
-        textEditor.className = 'editor-text';
-        // 把文本模式的内容同步到源码模式
-        const textVal = $('composeText').value;
-        if (textVal) {
-            $('composeHtml').value = textVal.replace(/\n/g, '<br>');
-            updatePreview();
-        }
-    } else {
-        textBtn.className = 'active';
-        srcBtn.className = '';
-        split.className = 'editor-split';
-        textEditor.className = 'editor-text show';
-        // 把源码模式的内容转成纯文本（去掉 HTML 标签）
-        const htmlVal = $('composeHtml').value;
-        if (htmlVal) {
-            const div = document.createElement('div');
-            div.innerHTML = htmlVal;
-            $('composeText').value = div.textContent || '';
-        }
+function syncPreviewToSource() {
+    const preview = $('composePreview');
+    const html = preview.innerHTML;
+    const placeholder = '👈 左边写源码，或直接在右边编辑文字';
+    if (!html.trim() || html.trim() === placeholder) {
+        return;
     }
+    $('composeHtml').value = html;
 }
 
-// ============================================================
-// 源码模式实时预览
-// ============================================================
 function updatePreview() {
     const html = $('composeHtml').value;
     const preview = $('composePreview');
+    const placeholder = '👈 左边写源码，或直接在右边编辑文字';
     if (html.trim()) {
         preview.innerHTML = html;
     } else {
-        preview.innerHTML = '<span class="empty-hint">👈 左边写内容，这里实时预览</span>';
+        preview.innerHTML = placeholder;
     }
 }
-
-// 绑定实时预览事件
-document.addEventListener('DOMContentLoaded', function() {
-    const textarea = $('composeHtml');
-    if (textarea) {
-        textarea.addEventListener('input', updatePreview);
-    }
-});
 
 // ============================================================
 // 加载邮件列表
@@ -624,7 +537,7 @@ function renderMails() {
         return;
     }
     mailListEl.innerHTML = mails.map(m => \`
-        <div class="mail-item" onclick="viewMail('\${encodeURIComponent(m.id)}')">
+        <div class="mail-item" onclick="viewMail('\${m.id}')">
             <div class="avatar">\${(m.from || '?')[0].toUpperCase()}</div>
             <div class="info">
                 <div class="from">\${escapeHtml(m.from)}</div>
@@ -649,7 +562,7 @@ function updateStats() {
 async function viewMail(id) {
     currentViewId = id;
     try {
-        const resp = await fetch('/mail/' + encodeURIComponent(id));
+        const resp = await fetch('/mail/' + id);
         if (!resp.ok) throw new Error('加载失败');
         const mail = await resp.json();
         $('viewSubject').textContent = mail.subject || '(无主题)';
@@ -674,10 +587,10 @@ function replyFromView() {
     closeView();
     $('composeTo').value = mail.from;
     $('composeSubject').value = 'Re: ' + (mail.subject || '');
-    // 默认用源码模式
-    setEditorMode('src');
-    $('composeHtml').value = '<br><br>--- 原始邮件 ---<br>' + (mail.text || '').replace(/\n/g, '<br>');
-    updatePreview();
+    const replyContent = '<br><br>--- 原始邮件 ---<br>' + (mail.text || '').replace(/\\n/g, '<br>');
+    $('composeHtml').value = replyContent;
+    const preview = $('composePreview');
+    preview.innerHTML = replyContent;
     $('composeModal').classList.add('active');
 }
 
@@ -685,7 +598,7 @@ async function deleteFromView() {
     if (!currentViewId) return;
     if (!confirm('确定要删除这封邮件吗？')) return;
     try {
-        const resp = await fetch('/mail/' + encodeURIComponent(currentViewId), { method: 'DELETE' });
+        const resp = await fetch('/mail/' + currentViewId, { method: 'DELETE' });
         if (!resp.ok) throw new Error('删除失败');
         showToast('已删除');
         closeView();
@@ -702,9 +615,8 @@ function openCompose() {
     $('composeTo').value = '';
     $('composeSubject').value = '';
     $('composeHtml').value = '';
-    $('composeText').value = '';
-    setEditorMode('src');
-    updatePreview();
+    const preview = $('composePreview');
+    preview.innerHTML = '👈 左边写源码，或直接在右边编辑文字';
     $('composeModal').classList.add('active');
 }
 
@@ -716,18 +628,14 @@ async function sendCompose() {
     const to = $('composeTo').value.trim();
     const subject = $('composeSubject').value.trim();
 
-    let html = '';
-    if (editorMode === 'src') {
-        html = $('composeHtml').value.trim();
-    } else {
-        // 文本模式：转义 + 换行转 <br>
-        const text = $('composeText').value.trim();
-        html = text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/\n/g, '<br>');
+    const preview = $('composePreview');
+    const previewContent = preview.innerHTML;
+    const placeholder = '👈 左边写源码，或直接在右边编辑文字';
+    if (previewContent && previewContent.trim() !== placeholder) {
+        $('composeHtml').value = previewContent;
     }
+
+    const html = $('composeHtml').value.trim();
 
     if (!to || !subject || !html) {
         showToast('请填写完整信息', true);
@@ -782,6 +690,25 @@ async function loadDomain() {
         domainBadge.textContent = '📧 ' + data.domain;
     } catch { domainBadge.textContent = '📧 未知域名'; }
 }
+
+// ============================================================
+// 绑定事件
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    const textarea = $('composeHtml');
+    const preview = $('composePreview');
+
+    if (textarea) {
+        textarea.addEventListener('input', updatePreview);
+    }
+
+    if (preview) {
+        const syncEvents = ['input', 'keyup', 'mouseup', 'paste'];
+        syncEvents.forEach(eventType => {
+            preview.addEventListener(eventType, syncPreviewToSource);
+        });
+    }
+});
 
 // ============================================================
 // 初始化
