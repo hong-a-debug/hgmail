@@ -678,7 +678,7 @@ export default {
         }
 
         if (path.startsWith('/mail/') && request.method === 'GET') {
-            const id = path.split('/')[2];
+            const id = decodeURIComponent(path.split('/')[2]);
             if (!id) {
                 return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
             }
@@ -690,7 +690,7 @@ export default {
         }
 
         if (path.startsWith('/mail/') && request.method === 'DELETE') {
-            const id = path.split('/')[2];
+            const id = decodeURIComponent(path.split('/')[2]);
             if (!id) {
                 return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
             }
