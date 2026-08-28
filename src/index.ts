@@ -834,7 +834,6 @@ export default {
             }
             await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
 
-            // 只有配置了 Resend API Key 才发送自动回复
             if (env.RESEND_API_KEY) {
                 await sendAutoReply(
                     env.RESEND_API_KEY,
@@ -867,7 +866,6 @@ export default {
             return Response.json({ domain: env.DOMAIN });
         }
 
-        // 检查 Resend API Key 是否配置
         if (path === '/check-resend') {
             const hasKey = !!env.RESEND_API_KEY;
             return Response.json({ configured: hasKey });
@@ -892,7 +890,6 @@ export default {
         }
 
         if (path === '/send' && request.method === 'POST') {
-            // 检查 Resend API Key 是否存在
             if (!env.RESEND_API_KEY) {
                 return Response.json(
                     { success: false, error: 'Resend API Key 未配置，请运行 npx wrangler secret put RESEND_API_KEY 设置' },
