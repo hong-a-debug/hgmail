@@ -80,9 +80,9 @@ DOMAIN = "example.com"
 
 ### 第五步：部署
 
-双击文件夹中的"部署.bat"
+双击项目文件夹中的 **`部署.bat`**
 
-如果遇到报错，使用：
+如果双击后报错，可以手动在终端运行：
 
 ```bash
 npx wrangler deploy --no-bundle
