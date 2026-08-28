@@ -530,12 +530,16 @@ async function checkResend() {
 function updateSendButtonVisibility() {
     const btn = $('composeSendBtn');
     const hint = $('resendHint');
+    const composeBtn = document.querySelector('.compose-btn');
+    
     if (!resendConfigured) {
         btn.style.display = 'none';
         hint.style.display = 'block';
+        if (composeBtn) composeBtn.style.display = 'none';
     } else {
         btn.style.display = 'block';
         hint.style.display = 'none';
+        if (composeBtn) composeBtn.style.display = 'block';
     }
 }
 
