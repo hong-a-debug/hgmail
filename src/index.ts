@@ -358,6 +358,23 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             font-size: 12px;
             color: #999;
         }
+        .resend-hint {
+            display: none;
+            color: #e74c3c;
+            font-size: 13px;
+            margin-top: 8px;
+            padding: 10px 14px;
+            background: #fef0ef;
+            border-radius: 8px;
+            border: 1px solid #f5c6cb;
+            line-height: 1.6;
+        }
+        .resend-hint code {
+            background: #f0f0f0;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -433,6 +450,12 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             </div>
         </div>
 
+        <!-- Resend 未配置提示 -->
+        <div class="resend-hint" id="resendHint">
+            ⚠️ 未配置 Resend API Key，无法发送邮件。<br />
+            请在终端运行：<code>npx wrangler secret put RESEND_API_KEY</code>
+        </div>
+
         <button class="send-btn" id="composeSendBtn" onclick="sendCompose()">📤 发送</button>
     </div>
 </div>
@@ -470,6 +493,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 let mails = [];
 let currentViewId = null;
 let refreshInterval = null;
+let resendConfigured = false;
 
 const $ = id => document.getElementById(id);
 const mailListEl = $('mailList');
@@ -484,6 +508,35 @@ function showToast(msg, isError = false) {
     t.className = 'toast show' + (isError ? ' error' : '');
     clearTimeout(t._hide);
     t._hide = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ============================================================
+// 检查 Resend 是否配置
+// ============================================================
+async function checkResend() {
+    try {
+        const resp = await fetch('/check-resend');
+        const data = await resp.json();
+        resendConfigured = data.configured;
+        updateSendButtonVisibility();
+        return resendConfigured;
+    } catch {
+        resendConfigured = false;
+        updateSendButtonVisibility();
+        return false;
+    }
+}
+
+function updateSendButtonVisibility() {
+    const btn = $('composeSendBtn');
+    const hint = $('resendHint');
+    if (!resendConfigured) {
+        btn.style.display = 'none';
+        hint.style.display = 'block';
+    } else {
+        btn.style.display = 'block';
+        hint.style.display = 'none';
+    }
 }
 
 // ============================================================
@@ -582,16 +635,22 @@ function closeView() {
 
 function replyFromView() {
     if (!currentViewId) return;
-    const mail = mails.find(m => m.id === currentViewId);
-    if (!mail) return;
-    closeView();
-    $('composeTo').value = mail.from;
-    $('composeSubject').value = 'Re: ' + (mail.subject || '');
-    const replyContent = '<br><br>--- 原始邮件 ---<br>' + (mail.text || '').replace(/\\n/g, '<br>');
-    $('composeHtml').value = replyContent;
-    const preview = $('composePreview');
-    preview.innerHTML = replyContent;
-    $('composeModal').classList.add('active');
+    checkResend().then(() => {
+        if (!resendConfigured) {
+            showToast('⚠️ 请先配置 Resend API Key：npx wrangler secret put RESEND_API_KEY', true);
+            return;
+        }
+        const mail = mails.find(m => m.id === currentViewId);
+        if (!mail) return;
+        closeView();
+        $('composeTo').value = mail.from;
+        $('composeSubject').value = 'Re: ' + (mail.subject || '');
+        const replyContent = '<br><br>--- 原始邮件 ---<br>' + (mail.text || '').replace(/\\n/g, '<br>');
+        $('composeHtml').value = replyContent;
+        const preview = $('composePreview');
+        preview.innerHTML = replyContent;
+        $('composeModal').classList.add('active');
+    });
 }
 
 async function deleteFromView() {
@@ -612,6 +671,7 @@ async function deleteFromView() {
 // 写邮件
 // ============================================================
 function openCompose() {
+    checkResend();
     $('composeTo').value = '';
     $('composeSubject').value = '';
     $('composeHtml').value = '';
@@ -627,6 +687,11 @@ function closeCompose() {
 async function sendCompose() {
     const to = $('composeTo').value.trim();
     const subject = $('composeSubject').value.trim();
+
+    if (!resendConfigured) {
+        showToast('⚠️ 请先配置 Resend API Key', true);
+        return;
+    }
 
     const preview = $('composePreview');
     const previewContent = preview.innerHTML;
@@ -715,6 +780,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // ============================================================
 loadDomain();
 loadMails();
+checkResend();
 refreshInterval = setInterval(loadMails, 30000);
 
 document.querySelectorAll('.modal-overlay').forEach(el => {
@@ -768,17 +834,20 @@ export default {
             }
             await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
 
-            await sendAutoReply(
-                env.RESEND_API_KEY,
-                env.DOMAIN,
-                parsed.from,
-                parsed.subject
-            );
-
-            const updated = { ...emailData, status: 'replied' as const };
-            await env.EMAIL.put(messageId, JSON.stringify(updated));
-
-            console.log(`✅ 邮件已存储并回复`);
+            // 只有配置了 Resend API Key 才发送自动回复
+            if (env.RESEND_API_KEY) {
+                await sendAutoReply(
+                    env.RESEND_API_KEY,
+                    env.DOMAIN,
+                    parsed.from,
+                    parsed.subject
+                );
+                const updated = { ...emailData, status: 'replied' as const };
+                await env.EMAIL.put(messageId, JSON.stringify(updated));
+                console.log(`✅ 邮件已存储并自动回复`);
+            } else {
+                console.log(`✅ 邮件已存储（未配置 Resend，跳过自动回复）`);
+            }
         } catch (error) {
             console.error('❌ 处理邮件失败:', error);
         }
@@ -796,6 +865,12 @@ export default {
 
         if (path === '/domain') {
             return Response.json({ domain: env.DOMAIN });
+        }
+
+        // 检查 Resend API Key 是否配置
+        if (path === '/check-resend') {
+            const hasKey = !!env.RESEND_API_KEY;
+            return Response.json({ configured: hasKey });
         }
 
         if (path === '/mails' && request.method === 'GET') {
@@ -817,6 +892,13 @@ export default {
         }
 
         if (path === '/send' && request.method === 'POST') {
+            // 检查 Resend API Key 是否存在
+            if (!env.RESEND_API_KEY) {
+                return Response.json(
+                    { success: false, error: 'Resend API Key 未配置，请运行 npx wrangler secret put RESEND_API_KEY 设置' },
+                    { status: 400 }
+                );
+            }
             try {
                 const body = (await request.json()) as {
                     to: string | string[];
