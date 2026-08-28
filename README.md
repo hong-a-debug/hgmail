@@ -55,6 +55,20 @@ npx wrangler secret put RESEND_API_KEY
 
 > 🔐 如果不配置，系统仍然可以**接收和存储邮件**，但**无法发送邮件**（包括自动回复和手动发信）。发送按钮会被**自动隐藏**并显示提示。
 
+### ⚠️ 重要：Secret 需要同时配置默认环境和生产环境
+
+如果你的 `wrangler.toml` 里有 `[env.production]` 配置（或者不确定有没有），建议同时设置两个环境：
+
+```bash
+# 设置默认环境
+npx wrangler secret put RESEND_API_KEY
+
+# 设置生产环境
+npx wrangler secret put RESEND_API_KEY --env production
+```
+
+> 🔐 如果不配置生产环境，部署到生产环境时 Worker 会读不到 Key，导致发送按钮被隐藏。
+
 ### 第四步：修改域名配置
 
 打开 `wrangler.toml`，将 `DOMAIN` 改为你的域名：
