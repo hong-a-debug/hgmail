@@ -76,6 +76,16 @@ npx wrangler deploy
 npx wrangler deploy --no-bundle
 ```
 
+### ⚠️ 部署时出现警告？
+
+如果你之前在 Cloudflare 网页控制台绑定了自定义域名（如 `mail.你的域名`），部署时可能会看到类似这样的警告：
+
+```
+▲ [WARNING] The local configuration being used differs from the remote configuration...
+```
+
+这是**正常现象**，输入 `Y` 按回车继续即可。这个警告只是告诉你本地配置和远程配置略有不同，不会影响已绑定的自定义域名。
+
 ### 第六步：配置邮件路由
 
 1. Cloudflare 控制台 → 你的域名 → **Email** → **Email Routing**
@@ -102,31 +112,6 @@ npx wrangler deploy --no-bundle
 1. Cloudflare 控制台 → **Workers 和 Pages** → 你的 Worker
 2. **设置** → **触发器** → **自定义域**
 3. 添加 `mail.你的域名`
-
----
-
-## ⚠️ 部署时常见警告
-
-### 警告：本地配置与远程配置不一致
-
-部署时如果看到类似这样的警告：
-
-```
-The local configuration being used differs from the remote configuration
-routes: [ { pattern: "mail.hg-chat.win", zone_name: "yourdomain.com" } ]
-```
-
-**原因**：你在 Cloudflare 网页控制台手动绑定了自定义域名，但本地 `wrangler.toml` 没有同步这个配置。
-
-**解决方式（二选一）**：
-
-1. **直接输入 `Y` 继续部署**（推荐）
-   - 选 `Y` 后部署会正常完成，远程的域名绑定**不会丢失**
-
-2. **把远程配置同步到本地，避免每次提示**
-   ```bash
-   wrangler deploy --outfile wrangler.toml
-   ```
 
 ---
 
@@ -166,6 +151,10 @@ curl -X POST https://你的地址.workers.dev/send \
 
 使用 `wrangler deploy --no-bundle` 部署。
 
+### Q: 部署时出现警告，选 Y 还是 N？
+
+选 **Y**（继续）。这个警告只是说本地配置和远程配置略有不同，选 Y 不会影响已绑定的自定义域名。
+
 ### Q: 收不到邮件？
 
 检查：
@@ -187,10 +176,6 @@ curl -X POST https://你的地址.workers.dev/send \
 ### Q: 收到邮件后没有自动回复？
 
 检查是否配置了 Resend API Key。如果未配置，自动回复会跳过，只存储邮件。
-
-### Q: 部署时提示本地配置与远程不一致？
-
-直接输入 `Y` 继续部署即可，或运行 `wrangler deploy --outfile wrangler.toml` 同步配置。
 
 ---
 
