@@ -53,7 +53,7 @@ id = "你复制的ID"
 npx wrangler secret put RESEND_API_KEY
 ```
 
-> 🔐 如果不配置，系统仍然可以**接收和存储邮件**，但**无法发送邮件**（包括自动回复和手动发信）。发送按钮会自动隐藏并给出提示。
+> 🔐 如果不配置，系统仍然可以**接收和存储邮件**，但**无法发送邮件**（包括自动回复和手动发信）。发送按钮会被**自动隐藏**并显示提示。
 
 ### 第四步：修改域名配置
 
@@ -105,6 +105,31 @@ npx wrangler deploy --no-bundle
 
 ---
 
+## ⚠️ 部署时常见警告
+
+### 警告：本地配置与远程配置不一致
+
+部署时如果看到类似这样的警告：
+
+```
+The local configuration being used differs from the remote configuration
+routes: [ { pattern: "mail.hg-chat.win", zone_name: "yourdomain.com" } ]
+```
+
+**原因**：你在 Cloudflare 网页控制台手动绑定了自定义域名，但本地 `wrangler.toml` 没有同步这个配置。
+
+**解决方式（二选一）**：
+
+1. **直接输入 `Y` 继续部署**（推荐）
+   - 选 `Y` 后部署会正常完成，远程的域名绑定**不会丢失**
+
+2. **把远程配置同步到本地，避免每次提示**
+   ```bash
+   wrangler deploy --outfile wrangler.toml
+   ```
+
+---
+
 ## 📖 API 接口
 
 | 接口 | 方法 | 用途 |
@@ -149,7 +174,7 @@ curl -X POST https://你的地址.workers.dev/send \
 3. Resend 域名验证是否完成（仅发信需要）
 4. DNS 记录是否已生效（等待几分钟）
 
-### Q: 邮件发送失败或发信按钮消失了？
+### Q: 邮件发送失败或发送按钮被隐藏了？
 
 1. 确认已配置 Resend API Key：`npx wrangler secret put RESEND_API_KEY`
 2. 确认域名在 Resend 已验证
@@ -157,11 +182,15 @@ curl -X POST https://你的地址.workers.dev/send \
 
 ### Q: 我只想收邮件，不想发邮件，可以吗？
 
-可以。不配置 Resend API Key 即可。系统会正常收件和存储，但发送按钮会自动隐藏，自动回复也会跳过。
+可以。不配置 Resend API Key 即可。系统会正常收件和存储，但发送按钮会被**自动隐藏**，自动回复也会跳过。
 
 ### Q: 收到邮件后没有自动回复？
 
 检查是否配置了 Resend API Key。如果未配置，自动回复会跳过，只存储邮件。
+
+### Q: 部署时提示本地配置与远程不一致？
+
+直接输入 `Y` 继续部署即可，或运行 `wrangler deploy --outfile wrangler.toml` 同步配置。
 
 ---
 
