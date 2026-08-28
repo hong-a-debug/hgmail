@@ -203,7 +203,8 @@ curl -X POST https://你的地址.workers.dev/send \
 ├── wrangler.toml          # Cloudflare 配置
 ├── package.json           # 依赖管理
 ├── tsconfig.json          # TypeScript 配置
-└── README.md              # 项目说明
+├── README.md              # 项目说明
+└── 部署.bat               # Windows 一键部署脚本（双击运行）
 ```
 
 ---
