@@ -835,7 +835,7 @@ async function generateRegCode() {
 function copyRegCode() {
     const codeInput = $('adminRegCode');
     const code = codeInput.value;
-    if (!code || code === '暂无注册码' || code === '已设置（点击生成新码）') {
+    if (!code || code === '暂无注册码') {
         showToast('没有可复制的注册码，请先生成', true);
         return;
     }
@@ -1073,13 +1073,13 @@ document.addEventListener('keydown', function(e) {
 // ============================================================
 
 export default {
-    async email(message: EmailMessage, env: Env, ctx: ExecutionContext) {
+    async email(message: any, env: Env, ctx: ExecutionContext) {
         console.log(`📨 收到邮件: from=${message.from}, to=${message.to}`);
 
         try {
             const raw = await new Response(message.raw).arrayBuffer();
             const parsed = await parseEmail(raw);
-            const messageId = message.headers.get('Message-ID') || crypto.randomUUID();
+            const messageId = message.headers?.get?.('Message-ID') || crypto.randomUUID();
 
             const emailData: StoredEmail = {
                 id: messageId,
@@ -1251,10 +1251,9 @@ export default {
             if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
 
             const settings = await getAdminSettings(env);
-            const regCodeHash = await env.EMAIL_USER.get('admin:regcode_hash');
-            const regCode = regCodeHash ? '已设置（点击生成新码）' : '暂无注册码';
-            const senderPrefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
-            return Response.json({ success: true, ...settings, regCode, senderPrefix });
+            const regCodePlain = await env.EMAIL_USER.get('admin:regcode_plain');
+            const regCode = regCodePlain || '暂无注册码';
+            return Response.json({ success: true, ...settings, regCode });
         }
 
         // ============================================================
