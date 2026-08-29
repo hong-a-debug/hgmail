@@ -5,7 +5,12 @@ compatibility_flags = ["nodejs_compat"]
 
 [vars]
 DOMAIN = "example.com"
+ADMIN_ACCOUNT = "admin"
 
 [[kv_namespaces]]
 binding = "EMAIL"
+id = "你的id"
+
+[[kv_namespaces]]
+binding = "EMAIL_USER"
 id = "你的id"
