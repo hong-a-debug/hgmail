@@ -1,15 +1,18 @@
 # 📧 邮件系统
 
-基于 Cloudflare Workers + KV + Resend 搭建的轻量级邮件收发系统。
+基于 Cloudflare Workers + KV + Resend 搭建的轻量级邮件收发系统，支持多用户、管理员控制面板。
 
 ## ✨ 功能特性
 
 - 📥 **收件存储** - 收到的邮件自动存入 KV，随时查看
+- 👥 **多用户支持** - 支持注册/登录，每个用户独立收件箱
+- 🔐 **权限控制** - 管理员可看全部邮件，普通用户只能看自己的
 - 🤖 **自动回复** - 收到邮件后自动回复（需配置 Resend）
 - 🖥️ **网页管理** - 简洁的收件箱界面，写邮件、回复、删除一键操作
 - 📤 **发送邮件** - 通过 Resend API 发送，支持 HTML 格式
 - 🔔 **实时刷新** - 收件箱每 30 秒自动刷新
-- 🔐 **安全校验** - 未配置 Resend API Key 时自动隐藏发送按钮并提示
+- ⚙️ **管理员面板** - 修改标题、发件邮箱、注册码、密码
+- 🔐 **安全校验** - 密码和注册码均使用 SHA256 哈希存储
 - 🔌 **开放 API** - 提供 RESTful API，方便程序化调用
 
 ---
@@ -35,16 +38,26 @@ npm install
 
 ### 第二步：创建 KV 命名空间
 
+需要创建两个 KV 命名空间：
+
 ```bash
+# 邮件存储
 npx wrangler kv:namespace create EMAIL
+
+# 用户存储
+npx wrangler kv:namespace create EMAIL_USER
 ```
 
-将输出的 `id` 填入 `wrangler.toml`：
+将输出的两个 `id` 分别填入 `wrangler.toml`：
 
 ```toml
 [[kv_namespaces]]
 binding = "EMAIL"
-id = "你复制的ID"
+id = "你复制的EMAIL_ID"
+
+[[kv_namespaces]]
+binding = "EMAIL_USER"
+id = "你复制的EMAIL_USER_ID"
 ```
 
 ### 第三步：设置 Resend API Key（可选，发信需要）
@@ -55,34 +68,23 @@ npx wrangler secret put RESEND_API_KEY
 
 > 🔐 如果不配置，系统仍然可以**接收和存储邮件**，但**无法发送邮件**（包括自动回复和手动发信）。发送按钮会被**自动隐藏**并显示提示。
 
-### ⚠️ 重要：Secret 需要同时配置默认环境和生产环境
-
-如果你的 `wrangler.toml` 里有 `[env.production]` 配置（或者不确定有没有），建议同时设置两个环境：
-
-```bash
-# 设置默认环境
-npx wrangler secret put RESEND_API_KEY
-
-# 设置生产环境
-npx wrangler secret put RESEND_API_KEY --env production
-```
-
-> 🔐 如果不配置生产环境，部署到生产环境时 Worker 会读不到 Key，导致发送按钮被隐藏。
-
 ### 第四步：修改域名配置
 
-打开 `wrangler.toml`，将 `DOMAIN` 改为你的域名：
+打开 `wrangler.toml`，将 `DOMAIN` 和 `ADMIN_ACCOUNT` 改为你的配置：
 
 ```toml
 [vars]
 DOMAIN = "example.com"
+ADMIN_ACCOUNT = "admin"   # 管理员账号名
 ```
 
 ### 第五步：部署
 
-双击项目文件夹中的 **`部署.bat`**
+```bash
+npx wrangler deploy
+```
 
-如果双击后报错，可以手动在终端运行：
+如果遇到报错，使用：
 
 ```bash
 npx wrangler deploy --no-bundle
@@ -96,7 +98,7 @@ npx wrangler deploy --no-bundle
 ▲ [WARNING] The local configuration being used differs from the remote configuration...
 ```
 
-这是**正常现象**，输入 `Y` 按回车继续即可。这个警告只是告诉你本地配置和远程配置略有不同，不会影响已绑定的自定义域名。
+这是**正常现象**，输入 `Y` 按回车继续即可。
 
 ### 第六步：配置邮件路由
 
@@ -127,16 +129,55 @@ npx wrangler deploy --no-bundle
 
 ---
 
+## 👥 用户指南
+
+### 首次注册（自动成为管理员）
+
+1. 访问你的邮件系统地址
+2. 点击 **去注册**
+3. 填写邮箱、密码、注册码（首次注册无需注册码，或使用默认注册码）
+4. **第一个注册的用户自动成为管理员**
+
+### 后续用户注册
+
+1. 管理员登录后，在左侧 **系统设置** 中点击 **生成新码**
+2. 将生成的注册码告诉新用户
+3. 新用户访问网站，点击注册，填写信息并输入注册码
+
+### 登录
+
+- 输入邮箱和密码即可登录
+- 管理员登录后会看到 **系统设置** 面板
+- 普通用户只能看到自己的邮件
+
+### 管理员功能
+
+| 功能 | 说明 |
+|------|------|
+| 查看全部邮件 | 管理员收件箱显示所有用户的邮件 |
+| 修改页面标题 | 自定义网站标题 |
+| 修改发件邮箱 | 设置发送邮件时使用的发件人地址 |
+| 生成注册码 | 为新用户生成注册码 |
+| 修改管理员密码 | 更新管理员登录密码 |
+
+---
+
 ## 📖 API 接口
 
 | 接口 | 方法 | 用途 |
 |------|------|------|
 | `/` | GET | 管理界面 |
-| `/mails` | GET | 邮件列表 |
-| `/mail/:id` | GET | 邮件详情 |
-| `/mail/:id` | DELETE | 删除邮件 |
+| `/register` | POST | 用户注册 |
+| `/login` | POST | 用户登录 |
+| `/logout` | POST | 退出登录 |
+| `/user/info` | GET | 获取当前用户信息 |
+| `/mails` | GET | 邮件列表（根据角色过滤） |
+| `/mail/:id` | GET | 邮件详情（权限控制） |
+| `/mail/:id` | DELETE | 删除邮件（权限控制） |
 | `/send` | POST | 发送邮件 |
-| `/domain` | GET | 获取域名 |
+| `/admin/account` | GET | 获取管理员账号名 |
+| `/admin/settings` | GET/POST | 管理员设置 |
+| `/admin/regcode` | POST | 生成注册码 |
 | `/check-resend` | GET | 检查 Resend 是否配置 |
 
 ### 发送邮件示例
@@ -153,6 +194,27 @@ curl -X POST https://你的地址.workers.dev/send \
 
 ---
 
+## 📁 项目结构
+
+```
+.
+├── src/
+│   ├── index.ts           # Worker 主入口
+│   ├── auth.ts            # 用户/会话管理
+│   ├── admin.ts           # 管理员设置
+│   ├── utils.ts           # SHA256 工具
+│   ├── email-parser.ts    # 邮件解析
+│   ├── resend-client.ts   # Resend 发送封装
+│   └── types.ts           # 类型定义
+├── wrangler.toml          # Cloudflare 配置
+├── package.json           # 依赖管理
+├── tsconfig.json          # TypeScript 配置
+├── README.md              # 项目说明
+└── 部署.bat               # Windows 一键部署脚本
+```
+
+---
+
 ## ❓ 常见问题
 
 ### Q: `workers.dev` 地址打不开？
@@ -165,7 +227,17 @@ curl -X POST https://你的地址.workers.dev/send \
 
 ### Q: 部署时出现警告，选 Y 还是 N？
 
-选 **Y**（继续）。这个警告只是说本地配置和远程配置略有不同，选 Y 不会影响已绑定的自定义域名。
+选 **Y**（继续）。
+
+### Q: 第一个注册的用户是谁？
+
+第一个注册的用户自动成为管理员。所以**务必第一时间注册**。
+
+### Q: 注册码是什么？从哪里获取？
+
+- 首次部署后，第一个用户注册**不需要注册码**（自动成为管理员）
+- 管理员登录后，在左侧 **系统设置** 中点击 **生成新码** 获取
+- 普通用户注册时需要输入管理员生成的注册码
 
 ### Q: 收不到邮件？
 
@@ -179,33 +251,17 @@ curl -X POST https://你的地址.workers.dev/send \
 
 1. 确认已配置 Resend API Key：`npx wrangler secret put RESEND_API_KEY`
 2. 确认域名在 Resend 已验证
-3. 确认发件人地址格式为 `noreply@你的域名`
+3. 管理员在 **系统设置** 中确认发件邮箱格式正确
 
-### Q: 我只想收邮件，不想发邮件，可以吗？
+### Q: 管理员密码忘了怎么办？
 
-可以。不配置 Resend API Key 即可。系统会正常收件和存储，但发送按钮会被**自动隐藏**，自动回复也会跳过。
+在 Cloudflare 控制台 → Workers → 你的 Worker → KV → `EMAIL_USER`，找到 `admin:password_hash`，删除它。然后重新注册第一个用户（会自动成为管理员）。
 
-### Q: 收到邮件后没有自动回复？
+或者在代码中临时加一个重置路由（不推荐生产环境使用）。
 
-检查是否配置了 Resend API Key。如果未配置，自动回复会跳过，只存储邮件。
+### Q: 普通用户能看到别人的邮件吗？
 
----
-
-## 📁 项目结构
-
-```
-.
-├── src/
-│   ├── index.ts           # Worker 主入口
-│   ├── email-parser.ts    # 邮件解析
-│   ├── resend-client.ts   # Resend 发送封装
-│   └── types.ts           # 类型定义
-├── wrangler.toml          # Cloudflare 配置
-├── package.json           # 依赖管理
-├── tsconfig.json          # TypeScript 配置
-├── README.md              # 项目说明
-└── 部署.bat               # Windows 一键部署脚本（双击运行）
-```
+**不能。** 普通用户只能看到自己邮箱收到的邮件（发件人或收件人是自己的邮箱）。管理员可以看到全部邮件。
 
 ---
 
