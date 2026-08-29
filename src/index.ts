@@ -19,7 +19,9 @@ import {
     verifyRegCode,
     generateRegCode,
     getAdminSettings,
-    saveAdminSettings
+    saveAdminSettings,
+    getSenderPrefix,
+    setSenderPrefix,
 } from './admin';
 
 // ============================================================
@@ -402,6 +404,11 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             transition: border-color 0.15s;
         }
         .admin-panel .field input:focus { outline: none; border-color: #667eea; }
+        .admin-panel .field input[readonly] { background: #f5f5f5; color: #999; cursor: not-allowed; }
+        .admin-panel .field .email-row { display: flex; align-items: center; gap: 4px; }
+        .admin-panel .field .email-row input { flex: 0 0 auto; width: 120px; }
+        .admin-panel .field .email-row span { color: #999; font-size: 14px; }
+        .admin-panel .field .email-row .domain-part { flex: 1; background: #f5f5f5; color: #999; padding: 8px 12px; border: 2px solid #e8ecf4; border-radius: 6px; font-size: 14px; cursor: not-allowed; }
         .admin-panel .field .code-row { display: flex; gap: 8px; }
         .admin-panel .field .code-row input { flex: 1; }
         .admin-panel .field .code-row button {
@@ -414,6 +421,8 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             white-space: nowrap;
         }
         .admin-panel .field .code-row button:hover { background: #5a6fd6; }
+        .admin-panel .field .code-row .copy-btn { background: #27ae60; }
+        .admin-panel .field .code-row .copy-btn:hover { background: #219a52; }
         .admin-panel .save-btn {
             width: 100%;
             padding: 10px;
@@ -426,6 +435,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             transition: background 0.15s;
         }
         .admin-panel .save-btn:hover { background: #5a6fd6; }
+        .admin-panel .field-hint { font-size: 12px; color: #999; margin-top: 2px; }
     </style>
 </head>
 <body>
@@ -480,12 +490,18 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
                 </div>
                 <div class="field">
                     <label>发件邮箱</label>
-                    <input id="adminSender" />
+                    <div class="email-row">
+                        <input id="adminSenderPrefix" placeholder="noreply" />
+                        <span>@</span>
+                        <span class="domain-part" id="adminSenderDomain">example.com</span>
+                    </div>
+                    <div class="field-hint">只能修改 @ 前面的部分</div>
                 </div>
                 <div class="field">
                     <label>注册码</label>
                     <div class="code-row">
                         <input id="adminRegCode" readonly />
+                        <button class="copy-btn" onclick="copyRegCode()">📋 复制</button>
                         <button onclick="generateRegCode()">生成新码</button>
                     </div>
                 </div>
@@ -599,7 +615,6 @@ function showRegister() {
     $('registerPage').style.display = 'flex';
     hideError('loginError');
     hideError('regError');
-    // 检查是否有管理员，更新注册提示
     checkHasAdmin();
 }
 
@@ -624,7 +639,7 @@ async function checkHasAdmin() {
         hint.style.display = 'block';
         return data.hasAdmin;
     } catch {
-        hasAdminCached = true; // 安全起见，默认需要注册码
+        hasAdminCached = true;
         return true;
     }
 }
@@ -662,7 +677,7 @@ async function login() {
 }
 
 // ============================================================
-// 注册（第一个用户注册码可为空）
+// 注册
 // ============================================================
 async function register() {
     const email = $('regEmail').value.trim();
@@ -675,7 +690,6 @@ async function register() {
     }
     hideError('regError');
 
-    // 检查是否有管理员，决定注册码是否必填
     const hasAdminUser = await checkHasAdmin();
     if (hasAdminUser && !regCode) {
         showError('regError', '请输入注册码');
@@ -736,29 +750,40 @@ async function loadMainApp() {
 }
 
 // ============================================================
-// 加载用户信息
+// 加载用户信息（不显示具体管理员账号名）
 // ============================================================
 async function loadUserInfo() {
     try {
         const resp = await fetch('/user/info');
         const data = await resp.json();
         if (data.success) {
-            $('userBadge').textContent = '👤 ' + data.email + (data.role === 'admin' ? ' (管理员)' : '');
-            if (data.role === 'admin') $('adminPanel').style.display = 'block';
+            if (data.role === 'admin') {
+                $('userBadge').textContent = '👤 管理员';
+                $('adminPanel').style.display = 'block';
+            } else {
+                $('userBadge').textContent = '👤 ' + data.email;
+            }
         }
     } catch { /* ignore */ }
 }
 
 // ============================================================
-// 加载管理员设置
+// 加载管理员设置（包含域名）
 // ============================================================
 async function loadAdminSettings() {
     try {
+        // 获取域名
+        const domainResp = await fetch('/admin/domain');
+        const domainData = await domainResp.json();
+        const domain = domainData.domain || 'example.com';
+        $('adminSenderDomain').textContent = domain;
+
+        // 获取其他设置
         const resp = await fetch('/admin/settings');
         const data = await resp.json();
         if (data.success) {
             $('adminTitle').value = data.title || '';
-            $('adminSender').value = data.sender || '';
+            $('adminSenderPrefix').value = data.senderPrefix || 'noreply';
             $('adminRegCode').value = data.regCode || '暂无注册码';
             $('headerTitle').textContent = data.title || '📧 邮件管理';
             document.title = data.title || '📧 邮件管理';
@@ -771,10 +796,10 @@ async function loadAdminSettings() {
 // ============================================================
 async function saveAdminSettings() {
     const title = $('adminTitle').value.trim();
-    const sender = $('adminSender').value.trim();
+    const senderPrefix = $('adminSenderPrefix').value.trim();
     const newPassword = $('adminNewPassword').value.trim();
 
-    const payload = { title, sender };
+    const payload = { title, senderPrefix };
     if (newPassword) payload.password_hash = await sha256(newPassword);
 
     try {
@@ -802,6 +827,25 @@ async function generateRegCode() {
         $('adminRegCode').value = data.regCode;
         showToast('✅ 新注册码已生成');
     } catch (e) { showToast('网络错误', true); }
+}
+
+// ============================================================
+// 复制注册码
+// ============================================================
+function copyRegCode() {
+    const codeInput = $('adminRegCode');
+    const code = codeInput.value;
+    if (!code || code === '暂无注册码' || code === '已设置（点击生成新码）') {
+        showToast('没有可复制的注册码，请先生成', true);
+        return;
+    }
+    navigator.clipboard.writeText(code).then(() => {
+        showToast('✅ 注册码已复制');
+    }).catch(() => {
+        codeInput.select();
+        document.execCommand('copy');
+        showToast('✅ 注册码已复制');
+    });
 }
 
 // ============================================================
@@ -1071,7 +1115,9 @@ export default {
             }
 
             if (env.RESEND_API_KEY) {
-                await sendAutoReply(env.RESEND_API_KEY, env.DOMAIN, parsed.from, parsed.subject);
+                const prefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
+                const sender = `${prefix}@${env.DOMAIN}`;
+                await sendAutoReply(env.RESEND_API_KEY, sender, parsed.from, parsed.subject);
                 const updated = { ...emailData, status: 'replied' as const };
                 await env.EMAIL.put(messageId, JSON.stringify(updated));
                 console.log('✅ 邮件已存储并自动回复');
@@ -1095,6 +1141,13 @@ export default {
             const sessionId = cookie.match(/session=([^;]+)/)?.[1];
             if (!sessionId) return null;
             return await getSession(env, sessionId);
+        }
+
+        // ============================================================
+        // 获取域名
+        // ============================================================
+        if (path === '/admin/domain') {
+            return Response.json({ domain: env.DOMAIN });
         }
 
         // ============================================================
@@ -1129,10 +1182,8 @@ export default {
                 const body = await request.json() as { email: string; password_hash: string; regCode: string };
                 const { email, password_hash, regCode } = body;
 
-                // 检查是否有管理员
                 const hasAdminUser = await env.EMAIL_USER.get('_admin_exists') === 'true';
 
-                // 如果有管理员，注册码必填
                 if (hasAdminUser) {
                     if (!regCode) return Response.json({ success: false, error: '请输入注册码' }, { status: 400 });
                     const regCodeHash = await sha256(regCode);
@@ -1202,7 +1253,8 @@ export default {
             const settings = await getAdminSettings(env);
             const regCodeHash = await env.EMAIL_USER.get('admin:regcode_hash');
             const regCode = regCodeHash ? '已设置（点击生成新码）' : '暂无注册码';
-            return Response.json({ success: true, ...settings, regCode });
+            const senderPrefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
+            return Response.json({ success: true, ...settings, regCode, senderPrefix });
         }
 
         // ============================================================
@@ -1214,8 +1266,8 @@ export default {
                 if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
                 if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
 
-                const body = await request.json() as { title: string; sender: string; password_hash?: string };
-                await saveAdminSettings(env, body.title, body.sender);
+                const body = await request.json() as { title: string; senderPrefix: string; password_hash?: string };
+                await saveAdminSettings(env, body.title, body.senderPrefix);
                 if (body.password_hash) await setAdminPasswordHash(env, body.password_hash);
                 return Response.json({ success: true });
             } catch (error) {
@@ -1346,7 +1398,8 @@ export default {
 
             try {
                 const body = await request.json() as { to: string | string[]; subject: string; html: string; text?: string };
-                const sender = await env.EMAIL_USER.get('admin:sender') || `noreply@${env.DOMAIN}`;
+                const prefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
+                const sender = `${prefix}@${env.DOMAIN}`;
                 const result = await sendEmail(env.RESEND_API_KEY, sender, body.to, body.subject, body.html, body.text);
                 return Response.json({ success: true, id: result.id });
             } catch (error) {
