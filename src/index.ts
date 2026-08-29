@@ -1,14 +1,39 @@
 import { Env, StoredEmail } from './types';
 import { parseEmail } from './email-parser';
 import { sendAutoReply, sendEmail } from './resend-client';
+import { sha256 } from './utils';
+import {
+    getUser,
+    createUser,
+    userExists,
+    createSession,
+    getSession,
+    destroySession,
+    hasAdmin,
+    setAdminExists,
+    updateUserRole
+} from './auth';
+import {
+    getAdminPasswordHash,
+    setAdminPasswordHash,
+    verifyAdminPassword,
+    getRegCodeHash,
+    setRegCodeHash,
+    verifyRegCode,
+    generateRegCode,
+    getAdminSettings,
+    saveAdminSettings
+} from './admin';
 
-// ===== HTML 前端模板 =====
+// ============================================================
+// HTML 前端模板
+// ============================================================
 const HTML_TEMPLATE = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>📧 邮件管理</title>
+    <title id="pageTitle">📧 邮件管理</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -297,7 +322,6 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         }
         @keyframes spin { to { transform: rotate(360deg); } }
 
-        /* ===== 源码模式：左右分栏 ===== */
         .editor-split {
             display: flex;
             gap: 12px;
@@ -375,18 +399,219 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             border-radius: 4px;
             font-size: 12px;
         }
+
+        /* ===== 登录/注册页面 ===== */
+        .auth-page {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            background: #f0f2f5;
+        }
+        .auth-box {
+            background: white;
+            padding: 40px;
+            border-radius: 16px;
+            max-width: 400px;
+            width: 100%;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .auth-box h2 {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+        .auth-box input {
+            width: 100%;
+            padding: 10px 14px;
+            border: 2px solid #e8ecf4;
+            border-radius: 10px;
+            font-size: 14px;
+            margin-bottom: 12px;
+            font-family: inherit;
+            transition: border-color 0.15s;
+        }
+        .auth-box input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .auth-box .auth-btn {
+            width: 100%;
+            padding: 12px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .auth-box .auth-btn:hover { background: #5a6fd6; }
+        .auth-box .auth-link {
+            text-align: center;
+            margin-top: 12px;
+            font-size: 14px;
+            color: #666;
+        }
+        .auth-box .auth-link a {
+            color: #667eea;
+            cursor: pointer;
+            text-decoration: none;
+        }
+        .auth-box .auth-link a:hover { text-decoration: underline; }
+        .auth-box .auth-error {
+            color: #e74c3c;
+            font-size: 13px;
+            margin-bottom: 8px;
+            display: none;
+        }
+        .auth-box .auth-hint {
+            color: #999;
+            font-size: 13px;
+            text-align: center;
+            margin-bottom: 12px;
+        }
+
+        /* ===== 管理员面板 ===== */
+        .admin-panel {
+            display: none;
+            margin-top: 20px;
+            padding: 16px;
+            background: #f8f9fc;
+            border-radius: 12px;
+            border: 1px solid #e8ecf4;
+        }
+        .admin-panel h3 {
+            font-size: 15px;
+            margin-bottom: 12px;
+            color: #333;
+        }
+        .admin-panel .field {
+            margin-bottom: 10px;
+        }
+        .admin-panel .field label {
+            font-size: 13px;
+            font-weight: 600;
+            display: block;
+            margin-bottom: 2px;
+            color: #555;
+        }
+        .admin-panel .field input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 2px solid #e8ecf4;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: inherit;
+            transition: border-color 0.15s;
+        }
+        .admin-panel .field input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .admin-panel .field .code-row {
+            display: flex;
+            gap: 8px;
+        }
+        .admin-panel .field .code-row input {
+            flex: 1;
+        }
+        .admin-panel .field .code-row button {
+            padding: 8px 16px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .admin-panel .field .code-row button:hover { background: #5a6fd6; }
+        .admin-panel .save-btn {
+            width: 100%;
+            padding: 10px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .admin-panel .save-btn:hover { background: #5a6fd6; }
     </style>
 </head>
 <body>
+
+<!-- ===== 登录页面 ===== -->
+<div id="loginPage" class="auth-page">
+    <div class="auth-box">
+        <h2>登录</h2>
+        <div id="loginError" class="auth-error"></div>
+        <div id="loginHint" class="auth-hint"></div>
+        <input id="loginEmail" type="email" placeholder="邮箱" />
+        <input id="loginPassword" type="password" placeholder="密码" />
+        <button class="auth-btn" onclick="login()">登录</button>
+        <div class="auth-link">
+            还没有账号？<a onclick="showRegister()">去注册</a>
+        </div>
+    </div>
+</div>
+
+<!-- ===== 注册页面 ===== -->
+<div id="registerPage" class="auth-page" style="display:none;">
+    <div class="auth-box">
+        <h2>注册</h2>
+        <div id="regError" class="auth-error"></div>
+        <input id="regEmail" type="email" placeholder="邮箱" />
+        <input id="regPassword" type="password" placeholder="密码" />
+        <input id="regCode" placeholder="注册码" style="text-transform:uppercase;" />
+        <button class="auth-btn" onclick="register()">注册</button>
+        <div class="auth-link">
+            已有账号？<a onclick="showLogin()">去登录</a>
+        </div>
+    </div>
+</div>
+
+<!-- ===== 主应用（登录后显示） ===== -->
+<div id="mainApp" style="display:none;">
 <div class="app">
     <header>
-        <h1>📧 邮件管理</h1>
-        <span class="badge" id="domainBadge">loading...</span>
+        <h1 id="headerTitle">📧 邮件管理</h1>
+        <div>
+            <span class="badge" id="userBadge">👤 </span>
+            <span class="badge" onclick="logout()" style="cursor:pointer;margin-left:8px;">🚪 退出</span>
+        </div>
     </header>
 
     <div class="container">
         <div class="sidebar">
             <button class="compose-btn" onclick="openCompose()">✏️ 写新邮件</button>
+
+            <!-- 管理员面板 -->
+            <div id="adminPanel" class="admin-panel">
+                <h3>⚙️ 系统设置</h3>
+                <div class="field">
+                    <label>页面标题</label>
+                    <input id="adminTitle" />
+                </div>
+                <div class="field">
+                    <label>发件邮箱</label>
+                    <input id="adminSender" />
+                </div>
+                <div class="field">
+                    <label>注册码</label>
+                    <div class="code-row">
+                        <input id="adminRegCode" readonly />
+                        <button onclick="generateRegCode()">生成新码</button>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>修改管理员密码</label>
+                    <input id="adminNewPassword" type="password" placeholder="留空不修改" />
+                </div>
+                <button class="save-btn" onclick="saveAdminSettings()">保存设置</button>
+            </div>
+
             <h2>📊 统计</h2>
             <div class="stats">
                 <div class="stat-item">
@@ -420,6 +645,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         </div>
     </div>
 </div>
+</div>
 
 <!-- ===== 写邮件弹窗 ===== -->
 <div class="modal-overlay" id="composeModal">
@@ -428,19 +654,14 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             <h3>✏️ 写邮件</h3>
             <button class="modal-close" onclick="closeCompose()">×</button>
         </div>
-
         <label>收件人</label>
         <input id="composeTo" placeholder="someone@example.com" />
-
         <label>主题</label>
         <input id="composeSubject" placeholder="邮件主题" />
-
         <div class="editor-label">
             <label>内容</label>
             <span class="hint">← 源码 | 预览 → (右边可直接编辑)</span>
         </div>
-
-        <!-- 左右分栏 -->
         <div class="editor-split">
             <div class="left">
                 <textarea id="composeHtml" placeholder="写 HTML 源码..."></textarea>
@@ -449,13 +670,10 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
                 <span class="empty-hint">👈 左边写源码，或直接在右边编辑文字</span>
             </div>
         </div>
-
-        <!-- Resend 未配置提示 -->
         <div class="resend-hint" id="resendHint">
             ⚠️ 未配置 Resend API Key，无法发送邮件。<br />
             请在终端运行：<code>npx wrangler secret put RESEND_API_KEY</code>
         </div>
-
         <button class="send-btn" id="composeSendBtn" onclick="sendCompose()">📤 发送</button>
     </div>
 </div>
@@ -488,20 +706,10 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
 
 <script>
 // ============================================================
-// 状态
+// 工具函数
 // ============================================================
-let mails = [];
-let currentViewId = null;
-let refreshInterval = null;
-let resendConfigured = false;
-
 const $ = id => document.getElementById(id);
-const mailListEl = $('mailList');
-const domainBadge = $('domainBadge');
 
-// ============================================================
-// Toast
-// ============================================================
 function showToast(msg, isError = false) {
     const t = $('toast');
     t.textContent = msg;
@@ -510,20 +718,242 @@ function showToast(msg, isError = false) {
     t._hide = setTimeout(() => t.classList.remove('show'), 3000);
 }
 
+function showError(elId, msg) {
+    const el = $(elId);
+    el.textContent = msg;
+    el.style.display = 'block';
+}
+
+function hideError(elId) {
+    $(elId).style.display = 'none';
+}
+
 // ============================================================
-// 检查 Resend 是否配置
+// SHA256
 // ============================================================
+async function sha256(message) {
+    const msgBuffer = new TextEncoder().encode(message);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ============================================================
+// 登录/注册切换
+// ============================================================
+function showLogin() {
+    $('loginPage').style.display = 'flex';
+    $('registerPage').style.display = 'none';
+    hideError('loginError');
+    hideError('regError');
+}
+
+function showRegister() {
+    $('loginPage').style.display = 'none';
+    $('registerPage').style.display = 'flex';
+    hideError('loginError');
+    hideError('regError');
+}
+
+// ============================================================
+// 登录
+// ============================================================
+async function login() {
+    const email = $('loginEmail').value.trim();
+    const password = $('loginPassword').value.trim();
+    if (!email || !password) {
+        showError('loginError', '请填写完整信息');
+        return;
+    }
+    hideError('loginError');
+
+    const passwordHash = await sha256(password);
+
+    try {
+        const resp = await fetch('/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password_hash: passwordHash })
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            showError('loginError', data.error || '登录失败');
+            return;
+        }
+        document.cookie = 'session=' + data.sessionId + '; path=/; max-age=604800';
+        loadMainApp();
+    } catch (e) {
+        showError('loginError', '网络错误，请重试');
+    }
+}
+
+// ============================================================
+// 注册
+// ============================================================
+async function register() {
+    const email = $('regEmail').value.trim();
+    const password = $('regPassword').value.trim();
+    const regCode = $('regCode').value.trim().toUpperCase();
+
+    if (!email || !password || !regCode) {
+        showError('regError', '请填写完整信息');
+        return;
+    }
+    hideError('regError');
+
+    const passwordHash = await sha256(password);
+
+    try {
+        const resp = await fetch('/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password_hash: passwordHash, regCode })
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            showError('regError', data.error || '注册失败');
+            return;
+        }
+        showToast('✅ 注册成功！请登录');
+        showLogin();
+        $('loginEmail').value = email;
+    } catch (e) {
+        showError('regError', '网络错误，请重试');
+    }
+}
+
+// ============================================================
+// 退出
+// ============================================================
+async function logout() {
+    document.cookie = 'session=; path=/; max-age=0';
+    $('mainApp').style.display = 'none';
+    $('loginPage').style.display = 'flex';
+    $('loginPassword').value = '';
+}
+
+// ============================================================
+// 加载主应用
+// ============================================================
+async function loadMainApp() {
+    $('loginPage').style.display = 'none';
+    $('registerPage').style.display = 'none';
+    $('mainApp').style.display = 'block';
+
+    // 加载管理员账号提示
+    try {
+        const resp = await fetch('/admin/account');
+        const data = await resp.json();
+        if (data.account) {
+            $('loginHint').textContent = '管理员账号：' + data.account;
+        }
+    } catch { /* ignore */ }
+
+    // 加载用户信息
+    await loadUserInfo();
+    await loadAdminSettings();
+    await loadMails();
+    await checkResend();
+    refreshInterval = setInterval(loadMails, 30000);
+}
+
+// ============================================================
+// 加载用户信息
+// ============================================================
+async function loadUserInfo() {
+    try {
+        const resp = await fetch('/user/info');
+        const data = await resp.json();
+        if (data.success) {
+            $('userBadge').textContent = '👤 ' + data.email + (data.role === 'admin' ? ' (管理员)' : '');
+            if (data.role === 'admin') {
+                $('adminPanel').style.display = 'block';
+            }
+        }
+    } catch { /* ignore */ }
+}
+
+// ============================================================
+// 加载管理员设置
+// ============================================================
+async function loadAdminSettings() {
+    try {
+        const resp = await fetch('/admin/settings');
+        const data = await resp.json();
+        if (data.success) {
+            $('adminTitle').value = data.title || '';
+            $('adminSender').value = data.sender || '';
+            $('adminRegCode').value = data.regCode || '暂无注册码';
+            $('headerTitle').textContent = data.title || '📧 邮件管理';
+            document.title = data.title || '📧 邮件管理';
+        }
+    } catch { /* ignore */ }
+}
+
+// ============================================================
+// 保存管理员设置
+// ============================================================
+async function saveAdminSettings() {
+    const title = $('adminTitle').value.trim();
+    const sender = $('adminSender').value.trim();
+    const newPassword = $('adminNewPassword').value.trim();
+
+    const payload = { title, sender };
+    if (newPassword) {
+        payload.password_hash = await sha256(newPassword);
+    }
+
+    try {
+        const resp = await fetch('/admin/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            showToast('保存失败: ' + data.error, true);
+            return;
+        }
+        showToast('✅ 设置已保存');
+        $('adminNewPassword').value = '';
+        await loadAdminSettings();
+    } catch (e) {
+        showToast('网络错误', true);
+    }
+}
+
+// ============================================================
+// 生成注册码
+// ============================================================
+async function generateRegCode() {
+    try {
+        const resp = await fetch('/admin/regcode', { method: 'POST' });
+        const data = await resp.json();
+        if (!data.success) {
+            showToast('生成失败: ' + data.error, true);
+            return;
+        }
+        $('adminRegCode').value = data.regCode;
+        showToast('✅ 新注册码已生成');
+    } catch (e) {
+        showToast('网络错误', true);
+    }
+}
+
+// ============================================================
+// 检查 Resend
+// ============================================================
+let resendConfigured = false;
+
 async function checkResend() {
     try {
         const resp = await fetch('/check-resend');
         const data = await resp.json();
         resendConfigured = data.configured;
         updateSendButtonVisibility();
-        return resendConfigured;
     } catch {
         resendConfigured = false;
         updateSendButtonVisibility();
-        return false;
     }
 }
 
@@ -531,7 +961,6 @@ function updateSendButtonVisibility() {
     const btn = $('composeSendBtn');
     const hint = $('resendHint');
     const composeBtn = document.querySelector('.compose-btn');
-    
     if (!resendConfigured) {
         btn.style.display = 'none';
         hint.style.display = 'block';
@@ -544,32 +973,13 @@ function updateSendButtonVisibility() {
 }
 
 // ============================================================
-// 左右双向同步
+// 邮件列表
 // ============================================================
-function syncPreviewToSource() {
-    const preview = $('composePreview');
-    const html = preview.innerHTML;
-    const placeholder = '👈 左边写源码，或直接在右边编辑文字';
-    if (!html.trim() || html.trim() === placeholder) {
-        return;
-    }
-    $('composeHtml').value = html;
-}
+let mails = [];
+let currentViewId = null;
+let refreshInterval = null;
+const mailListEl = $('mailList');
 
-function updatePreview() {
-    const html = $('composeHtml').value;
-    const preview = $('composePreview');
-    const placeholder = '👈 左边写源码，或直接在右边编辑文字';
-    if (html.trim()) {
-        preview.innerHTML = html;
-    } else {
-        preview.innerHTML = placeholder;
-    }
-}
-
-// ============================================================
-// 加载邮件列表
-// ============================================================
 async function loadMails() {
     try {
         const resp = await fetch('/mails');
@@ -613,13 +1023,28 @@ function updateStats() {
     $('repliedCount').textContent = mails.filter(m => m.status === 'replied').length;
 }
 
+function escapeHtml(str) {
+    if (!str) return '';
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function formatTime(ts) {
+    if (!ts) return '-';
+    try {
+        const d = new Date(ts);
+        return d.toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch { return ts; }
+}
+
 // ============================================================
 // 查看邮件
 // ============================================================
 async function viewMail(id) {
     currentViewId = id;
     try {
-        const resp = await fetch('/mail/' + id);
+        const resp = await fetch('/mail/' + encodeURIComponent(id));
         if (!resp.ok) throw new Error('加载失败');
         const mail = await resp.json();
         $('viewSubject').textContent = mail.subject || '(无主题)';
@@ -641,7 +1066,7 @@ function replyFromView() {
     if (!currentViewId) return;
     checkResend().then(() => {
         if (!resendConfigured) {
-            showToast('⚠️ 请先配置 Resend API Key：npx wrangler secret put RESEND_API_KEY', true);
+            showToast('⚠️ 请先配置 Resend API Key', true);
             return;
         }
         const mail = mails.find(m => m.id === currentViewId);
@@ -661,7 +1086,7 @@ async function deleteFromView() {
     if (!currentViewId) return;
     if (!confirm('确定要删除这封邮件吗？')) return;
     try {
-        const resp = await fetch('/mail/' + currentViewId, { method: 'DELETE' });
+        const resp = await fetch('/mail/' + encodeURIComponent(currentViewId), { method: 'DELETE' });
         if (!resp.ok) throw new Error('删除失败');
         showToast('已删除');
         closeView();
@@ -735,64 +1160,44 @@ async function sendCompose() {
 }
 
 // ============================================================
-// 工具函数
-// ============================================================
-function escapeHtml(str) {
-    if (!str) return '';
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-}
-
-function formatTime(ts) {
-    if (!ts) return '-';
-    try {
-        const d = new Date(ts);
-        return d.toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-    } catch { return ts; }
-}
-
-async function loadDomain() {
-    try {
-        const resp = await fetch('/domain');
-        const data = await resp.json();
-        domainBadge.textContent = '📧 ' + data.domain;
-    } catch { domainBadge.textContent = '📧 未知域名'; }
-}
-
-// ============================================================
-// 绑定事件
-// ============================================================
-document.addEventListener('DOMContentLoaded', function() {
-    const textarea = $('composeHtml');
-    const preview = $('composePreview');
-
-    if (textarea) {
-        textarea.addEventListener('input', updatePreview);
-    }
-
-    if (preview) {
-        const syncEvents = ['input', 'keyup', 'mouseup', 'paste'];
-        syncEvents.forEach(eventType => {
-            preview.addEventListener(eventType, syncPreviewToSource);
-        });
-    }
-});
-
-// ============================================================
 // 初始化
 // ============================================================
-loadDomain();
-loadMails();
-checkResend();
-refreshInterval = setInterval(loadMails, 30000);
-
-document.querySelectorAll('.modal-overlay').forEach(el => {
-    el.addEventListener('click', (e) => {
-        if (e.target === el) {
-            el.classList.remove('active');
+// 检查是否已登录
+async function init() {
+    const sessionId = document.cookie.match(/session=([^;]+)/)?.[1];
+    if (sessionId) {
+        try {
+            const resp = await fetch('/user/info');
+            if (resp.ok) {
+                loadMainApp();
+                return;
+            }
+        } catch { /* ignore */ }
+    }
+    $('loginPage').style.display = 'flex';
+    $('registerPage').style.display = 'none';
+    // 加载管理员账号提示
+    try {
+        const resp = await fetch('/admin/account');
+        const data = await resp.json();
+        if (data.account) {
+            $('loginHint').textContent = '管理员账号：' + data.account;
         }
-    });
+    } catch { /* ignore */ }
+}
+
+// 页面加载时执行
+document.addEventListener('DOMContentLoaded', init);
+
+// 键盘事件：回车登录/注册
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+        if ($('loginPage').style.display !== 'none') {
+            login();
+        } else if ($('registerPage').style.display !== 'none') {
+            register();
+        }
+    }
 });
 </script>
 </body>
@@ -822,10 +1227,12 @@ export default {
                 status: 'received',
             };
 
+            // ===== 邮件内容存 EMAIL KV =====
             await env.EMAIL.put(messageId, JSON.stringify(emailData), {
                 expirationTtl: 30 * 24 * 60 * 60,
             });
 
+            // ===== 全局邮件索引存 EMAIL KV =====
             const idsJson = await env.EMAIL.get('_mail_ids');
             let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
             ids.push(messageId);
@@ -838,6 +1245,21 @@ export default {
             }
             await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
 
+            // ===== 用户邮件列表存 EMAIL_USER KV =====
+            // 收件人可能有多个
+            const recipients = parsed.to.split(',').map(r => r.trim());
+            for (const recipient of recipients) {
+                const userListKey = `user:${recipient}:list`;
+                const userIdsJson = await env.EMAIL_USER.get(userListKey);
+                let userIds: string[] = userIdsJson ? JSON.parse(userIdsJson) : [];
+                userIds.push(messageId);
+                if (userIds.length > 500) {
+                    userIds = userIds.slice(-500);
+                }
+                await env.EMAIL_USER.put(userListKey, JSON.stringify(userIds));
+            }
+
+            // ===== 自动回复（需要 Resend Key）=====
             if (env.RESEND_API_KEY) {
                 await sendAutoReply(
                     env.RESEND_API_KEY,
@@ -860,24 +1282,206 @@ export default {
         const url = new URL(request.url);
         const path = url.pathname;
 
-        if (path === '/' || path === '') {
-            return new Response(HTML_TEMPLATE, {
-                headers: { 'Content-Type': 'text/html; charset=utf-8' },
-            });
+        // ============================================================
+        // 获取 Session
+        // ============================================================
+        async function getSessionFromCookie() {
+            const cookie = request.headers.get('Cookie') || '';
+            const sessionId = cookie.match(/session=([^;]+)/)?.[1];
+            if (!sessionId) return null;
+            return await getSession(env, sessionId);
         }
 
-        if (path === '/domain') {
-            return Response.json({ domain: env.DOMAIN });
+        // ============================================================
+        // 检查登录状态
+        // ============================================================
+        if (path === '/user/info') {
+            const session = await getSessionFromCookie();
+            if (!session) {
+                return Response.json({ success: false, error: '未登录' }, { status: 401 });
+            }
+            return Response.json({ success: true, email: session.email, role: session.role });
         }
 
+        // ============================================================
+        // 获取管理员账号
+        // ============================================================
+        if (path === '/admin/account') {
+            return Response.json({ account: env.ADMIN_ACCOUNT || 'admin' });
+        }
+
+        // ============================================================
+        // 注册
+        // ============================================================
+        if (path === '/register' && request.method === 'POST') {
+            try {
+                const body = await request.json() as { email: string; password_hash: string; regCode: string };
+                const { email, password_hash, regCode } = body;
+
+                // 验证注册码
+                const regCodeHash = await sha256(regCode);
+                if (!(await verifyRegCode(env, regCodeHash))) {
+                    return Response.json({ success: false, error: '注册码错误' }, { status: 400 });
+                }
+
+                // 检查用户是否已存在
+                if (await userExists(env, email)) {
+                    return Response.json({ success: false, error: '该邮箱已注册' }, { status: 400 });
+                }
+
+                // 判断是否为第一个用户（自动成为管理员）
+                const hasAdminUser = await hasAdmin(env);
+                const role = hasAdminUser ? 'user' : 'admin';
+
+                // 创建用户
+                await createUser(env, email, password_hash, role);
+
+                // 如果是第一个用户（管理员），标记管理员已存在
+                if (!hasAdminUser) {
+                    await setAdminExists(env, true);
+                    // 生成默认注册码
+                    await generateRegCode(env);
+                    // 同时把管理员账号名同步到普通变量（可选）
+                    // 但普通变量需要重新部署才能生效，所以建议在控制台手动设置
+                }
+
+                return Response.json({ success: true, role });
+            } catch (error) {
+                return Response.json({ success: false, error: String(error) }, { status: 500 });
+            }
+        }
+
+        // ============================================================
+        // 登录
+        // ============================================================
+        if (path === '/login' && request.method === 'POST') {
+            try {
+                const body = await request.json() as { email: string; password_hash: string };
+                const { email, password_hash } = body;
+
+                // 从 EMAIL_USER KV 获取用户信息
+                const user = await getUser(env, email);
+                if (!user) {
+                    return Response.json({ success: false, error: '用户不存在' }, { status: 400 });
+                }
+
+                if (user.password_hash !== password_hash) {
+                    return Response.json({ success: false, error: '密码错误' }, { status: 400 });
+                }
+
+                const sessionId = await createSession(env, email, user.role);
+                return Response.json({ success: true, role: user.role, sessionId });
+            } catch (error) {
+                return Response.json({ success: false, error: String(error) }, { status: 500 });
+            }
+        }
+
+        // ============================================================
+        // 退出
+        // ============================================================
+        if (path === '/logout' && request.method === 'POST') {
+            const cookie = request.headers.get('Cookie') || '';
+            const sessionId = cookie.match(/session=([^;]+)/)?.[1];
+            if (sessionId) {
+                await destroySession(env, sessionId);
+            }
+            return Response.json({ success: true });
+        }
+
+        // ============================================================
+        // 获取管理员设置（需要登录 + 管理员权限）
+        // ============================================================
+        if (path === '/admin/settings' && request.method === 'GET') {
+            const session = await getSessionFromCookie();
+            if (!session) {
+                return Response.json({ success: false, error: '未登录' }, { status: 401 });
+            }
+            if (session.role !== 'admin') {
+                return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
+            }
+
+            const settings = await getAdminSettings(env);
+            // 获取当前注册码明文（如果有）
+            let regCode = '暂无注册码';
+            const regCodeHash = await env.EMAIL_USER.get('admin:regcode_hash');
+            // 注册码无法反推，只显示"已设置"
+            if (regCodeHash) {
+                regCode = '已设置（点击生成新码）';
+            }
+            return Response.json({ success: true, ...settings, regCode });
+        }
+
+        // ============================================================
+        // 保存管理员设置（需要登录 + 管理员权限）
+        // ============================================================
+        if (path === '/admin/settings' && request.method === 'POST') {
+            try {
+                const session = await getSessionFromCookie();
+                if (!session) {
+                    return Response.json({ success: false, error: '未登录' }, { status: 401 });
+                }
+                if (session.role !== 'admin') {
+                    return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
+                }
+
+                const body = await request.json() as { title: string; sender: string; password_hash?: string };
+                await saveAdminSettings(env, body.title, body.sender);
+
+                if (body.password_hash) {
+                    await setAdminPasswordHash(env, body.password_hash);
+                }
+
+                return Response.json({ success: true });
+            } catch (error) {
+                return Response.json({ success: false, error: String(error) }, { status: 500 });
+            }
+        }
+
+        // ============================================================
+        // 生成注册码（需要登录 + 管理员权限）
+        // ============================================================
+        if (path === '/admin/regcode' && request.method === 'POST') {
+            const session = await getSessionFromCookie();
+            if (!session) {
+                return Response.json({ success: false, error: '未登录' }, { status: 401 });
+            }
+            if (session.role !== 'admin') {
+                return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
+            }
+
+            const code = await generateRegCode(env);
+            return Response.json({ success: true, regCode: code });
+        }
+
+        // ============================================================
+        // 检查 Resend
+        // ============================================================
         if (path === '/check-resend') {
             const hasKey = !!env.RESEND_API_KEY;
             return Response.json({ configured: hasKey });
         }
 
+        // ============================================================
+        // 获取邮件列表（根据角色过滤）
+        // ============================================================
         if (path === '/mails' && request.method === 'GET') {
-            const idsJson = await env.EMAIL.get('_mail_ids');
-            const ids: string[] = idsJson ? JSON.parse(idsJson) : [];
+            const session = await getSessionFromCookie();
+            if (!session) {
+                return Response.json({ error: '未登录' }, { status: 401 });
+            }
+
+            let ids: string[] = [];
+            if (session.role === 'admin') {
+                // 管理员看全部邮件
+                const idsJson = await env.EMAIL.get('_mail_ids');
+                ids = idsJson ? JSON.parse(idsJson) : [];
+            } else {
+                // 普通用户只看自己的邮件
+                const userListKey = `user:${session.email}:list`;
+                const idsJson = await env.EMAIL_USER.get(userListKey);
+                ids = idsJson ? JSON.parse(idsJson) : [];
+            }
+
             const recentIds = ids.slice(-50).reverse();
             const mails: StoredEmail[] = [];
             for (const id of recentIds) {
@@ -885,21 +1489,122 @@ export default {
                 if (data) {
                     try {
                         mails.push(JSON.parse(data));
-                    } catch {
-                        // ignore
-                    }
+                    } catch { /* ignore */ }
                 }
             }
             return Response.json({ mails });
         }
 
+        // ============================================================
+        // 获取单封邮件（检查权限：用户只能看自己的邮件，管理员看全部）
+        // ============================================================
+        if (path.startsWith('/mail/') && request.method === 'GET') {
+            const session = await getSessionFromCookie();
+            if (!session) {
+                return Response.json({ error: '未登录' }, { status: 401 });
+            }
+
+            const id = decodeURIComponent(path.split('/')[2]);
+            if (!id) {
+                return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
+            }
+
+            const data = await env.EMAIL.get(id);
+            if (!data) {
+                return Response.json({ error: '邮件不存在' }, { status: 404 });
+            }
+
+            const mail = JSON.parse(data) as StoredEmail;
+
+            // 普通用户检查权限：只能看自己的邮件（发件人或收件人匹配）
+            if (session.role !== 'admin') {
+                const userEmail = session.email;
+                const from = mail.from?.toLowerCase() || '';
+                const to = mail.to?.toLowerCase() || '';
+                if (from !== userEmail && to !== userEmail) {
+                    return Response.json({ error: '无权查看此邮件' }, { status: 403 });
+                }
+            }
+
+            return Response.json(mail);
+        }
+
+        // ============================================================
+        // 删除邮件（检查权限）
+        // ============================================================
+        if (path.startsWith('/mail/') && request.method === 'DELETE') {
+            const session = await getSessionFromCookie();
+            if (!session) {
+                return Response.json({ error: '未登录' }, { status: 401 });
+            }
+
+            const id = decodeURIComponent(path.split('/')[2]);
+            if (!id) {
+                return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
+            }
+
+            // 检查邮件是否存在
+            const data = await env.EMAIL.get(id);
+            if (!data) {
+                return Response.json({ error: '邮件不存在' }, { status: 404 });
+            }
+
+            const mail = JSON.parse(data) as StoredEmail;
+
+            // 普通用户检查权限：只能删除自己的邮件
+            if (session.role !== 'admin') {
+                const userEmail = session.email;
+                const to = mail.to?.toLowerCase() || '';
+                if (to !== userEmail) {
+                    return Response.json({ error: '无权删除此邮件' }, { status: 403 });
+                }
+            }
+
+            // 从全局索引删除
+            const idsJson = await env.EMAIL.get('_mail_ids');
+            let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
+            ids = ids.filter((i) => i !== id);
+            await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
+
+            // 从用户邮件列表删除
+            if (session.role === 'admin') {
+                // 管理员删除时，从所有用户列表中移除
+                // 简化处理：遍历所有用户（生产环境建议用 D1）
+                // 这里只从全局索引删除，用户列表中的记录保留但不会显示
+            } else {
+                const userListKey = `user:${session.email}:list`;
+                const userIdsJson = await env.EMAIL_USER.get(userListKey);
+                let userIds: string[] = userIdsJson ? JSON.parse(userIdsJson) : [];
+                userIds = userIds.filter((i) => i !== id);
+                await env.EMAIL_USER.put(userListKey, JSON.stringify(userIds));
+            }
+
+            // 删除邮件内容（管理员删除时会真正删除，普通用户删除只是从列表移除）
+            // 考虑到共享邮件，只有在没有用户引用时再删除
+            // 简化处理：管理员删除时直接删除邮件内容
+            if (session.role === 'admin') {
+                await env.EMAIL.delete(id);
+            }
+
+            return Response.json({ success: true });
+        }
+
+        // ============================================================
+        // 发送邮件
+        // ============================================================
         if (path === '/send' && request.method === 'POST') {
+            const session = await getSessionFromCookie();
+            if (!session) {
+                return Response.json({ error: '未登录' }, { status: 401 });
+            }
+
             if (!env.RESEND_API_KEY) {
                 return Response.json(
-                    { success: false, error: 'Resend API Key 未配置，请运行 npx wrangler secret put RESEND_API_KEY 设置' },
+                    { success: false, error: 'Resend API Key 未配置' },
                     { status: 400 }
                 );
             }
+
             try {
                 const body = (await request.json()) as {
                     to: string | string[];
@@ -907,9 +1612,13 @@ export default {
                     html: string;
                     text?: string;
                 };
+
+                // 获取发件人邮箱（管理员设置或默认）
+                const sender = await env.EMAIL_USER.get('admin:sender') || `noreply@${env.DOMAIN}`;
+
                 const result = await sendEmail(
                     env.RESEND_API_KEY,
-                    `noreply@${env.DOMAIN}`,
+                    sender,
                     body.to,
                     body.subject,
                     body.html,
@@ -924,29 +1633,13 @@ export default {
             }
         }
 
-        if (path.startsWith('/mail/') && request.method === 'GET') {
-            const id = decodeURIComponent(path.split('/')[2]);
-            if (!id) {
-                return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
-            }
-            const data = await env.EMAIL.get(id);
-            if (!data) {
-                return Response.json({ error: '邮件不存在' }, { status: 404 });
-            }
-            return Response.json(JSON.parse(data));
-        }
-
-        if (path.startsWith('/mail/') && request.method === 'DELETE') {
-            const id = decodeURIComponent(path.split('/')[2]);
-            if (!id) {
-                return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
-            }
-            const idsJson = await env.EMAIL.get('_mail_ids');
-            let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
-            ids = ids.filter((i) => i !== id);
-            await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
-            await env.EMAIL.delete(id);
-            return Response.json({ success: true });
+        // ============================================================
+        // 首页
+        // ============================================================
+        if (path === '/' || path === '') {
+            return new Response(HTML_TEMPLATE, {
+                headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            });
         }
 
         return Response.json({ error: '未找到该路由' }, { status: 404 });
