@@ -65,7 +65,6 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             grid-template-columns: 320px 1fr;
             gap: 24px;
         }
-        @media (max-width: 768px) { .container { grid-template-columns: 1fr; } }
         .sidebar {
             background: white;
             border-radius: 16px;
@@ -436,6 +435,266 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         }
         .admin-panel .save-btn:hover { background: #5a6fd6; }
         .admin-panel .field-hint { font-size: 12px; color: #999; margin-top: 2px; }
+
+        /* ============================================================ */
+        /* ===== 移动端适配（新增） ===== */
+        /* ============================================================ */
+
+        @media (max-width: 768px) {
+            body {
+                padding: 10px;
+            }
+            .app {
+                max-width: 100%;
+            }
+            header {
+                padding: 16px 20px;
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+            header h1 {
+                font-size: 18px;
+            }
+            header .badge {
+                font-size: 12px;
+                padding: 4px 12px;
+            }
+            .container {
+                grid-template-columns: 1fr;
+                gap: 16px;
+            }
+            .sidebar {
+                position: static;
+                padding: 16px;
+            }
+            .stats {
+                grid-template-columns: 1fr 1fr;
+                gap: 6px;
+            }
+            .stat-item {
+                padding: 10px;
+            }
+            .stat-item .num {
+                font-size: 18px;
+            }
+            .mail-list {
+                min-height: 300px;
+            }
+            .mail-list-header {
+                padding: 12px 16px;
+                flex-wrap: wrap;
+                gap: 8px;
+            }
+            .mail-list-header h2 {
+                font-size: 16px;
+            }
+            .mail-item {
+                padding: 12px 16px;
+                gap: 10px;
+            }
+            .mail-item .avatar {
+                width: 32px;
+                height: 32px;
+                font-size: 12px;
+                flex-shrink: 0;
+            }
+            .mail-item .info .from {
+                font-size: 13px;
+            }
+            .mail-item .info .subject {
+                font-size: 12px;
+            }
+            .mail-item .info .time {
+                font-size: 11px;
+            }
+            .mail-item .status-badge {
+                font-size: 10px;
+                padding: 2px 8px;
+            }
+            .modal {
+                padding: 20px;
+                max-width: 100%;
+                width: 100%;
+                max-height: 95vh;
+                border-radius: 12px;
+                margin: 10px;
+            }
+            .modal-header h3 {
+                font-size: 17px;
+            }
+            .modal label {
+                font-size: 13px;
+                margin-top: 12px;
+            }
+            .modal input, .modal textarea {
+                font-size: 14px;
+                padding: 10px 12px;
+            }
+            .modal .send-btn {
+                font-size: 15px;
+                padding: 12px;
+            }
+            .editor-split {
+                flex-direction: column;
+                gap: 8px;
+                min-height: auto;
+            }
+            .editor-split .left textarea {
+                min-height: 150px;
+                font-size: 14px;
+            }
+            .editor-split .right {
+                min-height: 120px;
+                font-size: 14px;
+            }
+            .editor-label {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 4px;
+            }
+            .editor-label .hint {
+                font-size: 11px;
+            }
+            .auth-box {
+                padding: 24px 20px;
+                margin: 10px;
+                max-width: 100%;
+            }
+            .auth-box h2 {
+                font-size: 20px;
+                margin-bottom: 16px;
+            }
+            .auth-box input {
+                font-size: 14px;
+                padding: 12px 14px;
+            }
+            .auth-box .auth-btn {
+                font-size: 15px;
+                padding: 12px;
+            }
+            .auth-box .auth-link {
+                font-size: 13px;
+            }
+            .admin-panel {
+                padding: 12px;
+            }
+            .admin-panel h3 {
+                font-size: 14px;
+            }
+            .admin-panel .field label {
+                font-size: 12px;
+            }
+            .admin-panel .field input {
+                font-size: 13px;
+                padding: 6px 10px;
+            }
+            .admin-panel .field .email-row {
+                flex-wrap: wrap;
+            }
+            .admin-panel .field .email-row input {
+                flex: 1;
+                min-width: 80px;
+                width: auto;
+            }
+            .admin-panel .field .email-row .domain-part {
+                font-size: 13px;
+                padding: 6px 10px;
+            }
+            .admin-panel .field .code-row {
+                flex-wrap: wrap;
+            }
+            .admin-panel .field .code-row input {
+                flex: 1;
+                min-width: 100px;
+            }
+            .admin-panel .field .code-row button {
+                font-size: 12px;
+                padding: 6px 12px;
+            }
+            .admin-panel .save-btn {
+                font-size: 14px;
+                padding: 10px;
+            }
+            #viewModal .modal {
+                max-width: 100%;
+                padding: 16px;
+            }
+            #viewModal .modal-header h3 {
+                font-size: 16px;
+            }
+            #viewBody {
+                font-size: 14px;
+                padding: 12px !important;
+                min-height: 80px;
+            }
+            #viewModal .send-btn {
+                font-size: 13px;
+                padding: 10px;
+            }
+            .toast {
+                font-size: 13px;
+                padding: 10px 20px;
+                max-width: 90%;
+                bottom: 16px;
+            }
+        }
+
+        @media (max-width: 400px) {
+            body {
+                padding: 6px;
+            }
+            header {
+                padding: 12px 14px;
+            }
+            header h1 {
+                font-size: 16px;
+            }
+            .sidebar {
+                padding: 12px;
+            }
+            .compose-btn {
+                padding: 12px;
+                font-size: 14px;
+            }
+            .mail-item {
+                padding: 10px 12px;
+            }
+            .modal {
+                padding: 16px;
+                margin: 6px;
+            }
+            .auth-box {
+                padding: 16px;
+            }
+            .editor-split .left textarea {
+                min-height: 120px;
+            }
+            .editor-split .right {
+                min-height: 100px;
+            }
+            .admin-panel .field .email-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .admin-panel .field .email-row input {
+                width: 100%;
+                flex: none;
+            }
+            .admin-panel .field .email-row .domain-part {
+                width: 100%;
+            }
+            .admin-panel .field .code-row {
+                flex-direction: column;
+            }
+            .admin-panel .field .code-row input {
+                width: 100%;
+            }
+            .admin-panel .field .code-row button {
+                width: 100%;
+                justify-content: center;
+            }
+        }
     </style>
 </head>
 <body>
