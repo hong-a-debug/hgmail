@@ -80,9 +80,7 @@ ADMIN_ACCOUNT = "admin"   # 管理员账号名
 
 ### 第五步：部署
 
-```bash
-npx wrangler deploy
-```
+双击**部署.bat**
 
 如果遇到报错，使用：
 
