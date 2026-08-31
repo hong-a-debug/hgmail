@@ -11,13 +11,6 @@ import {
     destroySession,
     hasAdmin,
     setAdminExists,
-    createApiKey,
-    getApiKey,
-    deleteApiKey,
-    listApiKeys,
-    addApiKeyToList,
-    removeApiKeyFromList,
-    getSessionFromRequest,
 } from './auth';
 import {
     getAdminPasswordHash,
@@ -41,6 +34,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title id="pageTitle">📧 邮件管理</title>
     <style>
+        /* ===== 全局基础样式 ===== */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -66,7 +60,10 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             padding: 6px 16px;
             border-radius: 20px;
             font-size: 14px;
+            cursor: default;
         }
+        header .badge.clickable { cursor: pointer; }
+        header .badge.clickable:hover { background: rgba(255,255,255,0.3); }
         .container {
             display: grid;
             grid-template-columns: 320px 1fr;
@@ -97,6 +94,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             margin-bottom: 20px;
         }
         .compose-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4); }
+        .compose-btn:active { transform: translateY(0); }
         .stats {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -227,7 +225,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             margin-bottom: 4px;
             color: #555;
         }
-        .modal input {
+        .modal input, .modal textarea {
             width: 100%;
             padding: 10px 14px;
             border: 2px solid #e8ecf4;
@@ -236,7 +234,8 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             font-family: inherit;
             transition: border-color 0.15s;
         }
-        .modal input:focus { outline: none; border-color: #667eea; }
+        .modal input:focus, .modal textarea:focus { outline: none; border-color: #667eea; }
+        .modal textarea { min-height: 120px; resize: vertical; }
         .modal .send-btn {
             margin-top: 20px;
             width: 100%;
@@ -426,6 +425,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
             border-radius: 6px;
             cursor: pointer;
             white-space: nowrap;
+            transition: background 0.15s;
         }
         .admin-panel .field .code-row button:hover { background: #5a6fd6; }
         .admin-panel .field .code-row .copy-btn { background: #27ae60; }
@@ -443,51 +443,83 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         }
         .admin-panel .save-btn:hover { background: #5a6fd6; }
         .admin-panel .field-hint { font-size: 12px; color: #999; margin-top: 2px; }
-        .admin-panel .api-key-section {
-            margin-top: 12px;
-            padding-top: 12px;
-            border-top: 1px solid #e8ecf4;
+
+        /* ===== 移动端适配 ===== */
+        @media (max-width: 768px) {
+            body { padding: 10px; }
+            .app { max-width: 100%; }
+            header {
+                padding: 16px 20px;
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
+            }
+            header h1 { font-size: 18px; }
+            header .badge { font-size: 12px; padding: 4px 12px; }
+            .container { grid-template-columns: 1fr; gap: 16px; }
+            .sidebar { position: static; padding: 16px; }
+            .stats { grid-template-columns: 1fr 1fr; gap: 6px; }
+            .stat-item { padding: 10px; }
+            .stat-item .num { font-size: 18px; }
+            .mail-list { min-height: 300px; }
+            .mail-list-header { padding: 12px 16px; flex-wrap: wrap; gap: 8px; }
+            .mail-list-header h2 { font-size: 16px; }
+            .mail-item { padding: 12px 16px; gap: 10px; }
+            .mail-item .avatar { width: 32px; height: 32px; font-size: 12px; }
+            .mail-item .info .from { font-size: 13px; }
+            .mail-item .info .subject { font-size: 12px; }
+            .mail-item .info .time { font-size: 11px; }
+            .mail-item .status-badge { font-size: 10px; padding: 2px 8px; }
+            .modal { padding: 20px; max-width: 100%; width: 100%; max-height: 95vh; border-radius: 12px; margin: 10px; }
+            .modal-header h3 { font-size: 17px; }
+            .modal label { font-size: 13px; margin-top: 12px; }
+            .modal input, .modal textarea { font-size: 14px; padding: 10px 12px; }
+            .modal .send-btn { font-size: 15px; padding: 12px; }
+            .editor-split { flex-direction: column; gap: 8px; min-height: auto; }
+            .editor-split .left textarea { min-height: 150px; font-size: 14px; }
+            .editor-split .right { min-height: 120px; font-size: 14px; }
+            .editor-label { flex-direction: column; align-items: flex-start; gap: 4px; }
+            .editor-label .hint { font-size: 11px; }
+            .auth-box { padding: 24px 20px; margin: 10px; max-width: 100%; }
+            .auth-box h2 { font-size: 20px; margin-bottom: 16px; }
+            .auth-box input { font-size: 14px; padding: 12px 14px; }
+            .auth-box .auth-btn { font-size: 15px; padding: 12px; }
+            .auth-box .auth-link { font-size: 13px; }
+            .admin-panel { padding: 12px; }
+            .admin-panel h3 { font-size: 14px; }
+            .admin-panel .field label { font-size: 12px; }
+            .admin-panel .field input { font-size: 13px; padding: 6px 10px; }
+            .admin-panel .field .email-row { flex-wrap: wrap; }
+            .admin-panel .field .email-row input { flex: 1; min-width: 80px; width: auto; }
+            .admin-panel .field .email-row .domain-part { font-size: 13px; padding: 6px 10px; }
+            .admin-panel .field .code-row { flex-wrap: wrap; }
+            .admin-panel .field .code-row input { flex: 1; min-width: 100px; }
+            .admin-panel .field .code-row button { font-size: 12px; padding: 6px 12px; }
+            .admin-panel .save-btn { font-size: 14px; padding: 10px; }
+            #viewModal .modal { max-width: 100%; padding: 16px; }
+            #viewModal .modal-header h3 { font-size: 16px; }
+            #viewBody { font-size: 14px; padding: 12px !important; min-height: 80px; }
+            #viewModal .send-btn { font-size: 13px; padding: 10px; }
+            .toast { font-size: 13px; padding: 10px 20px; max-width: 90%; bottom: 16px; }
         }
-        .admin-panel .api-key-section .key-row {
-            display: flex;
-            gap: 8px;
-            align-items: center;
+        @media (max-width: 400px) {
+            body { padding: 6px; }
+            header { padding: 12px 14px; }
+            header h1 { font-size: 16px; }
+            .sidebar { padding: 12px; }
+            .compose-btn { padding: 12px; font-size: 14px; }
+            .mail-item { padding: 10px 12px; }
+            .modal { padding: 16px; margin: 6px; }
+            .auth-box { padding: 16px; }
+            .editor-split .left textarea { min-height: 120px; }
+            .editor-split .right { min-height: 100px; }
+            .admin-panel .field .email-row { flex-direction: column; align-items: stretch; }
+            .admin-panel .field .email-row input { width: 100%; flex: none; }
+            .admin-panel .field .email-row .domain-part { width: 100%; }
+            .admin-panel .field .code-row { flex-direction: column; }
+            .admin-panel .field .code-row input { width: 100%; }
+            .admin-panel .field .code-row button { width: 100%; justify-content: center; }
         }
-        .admin-panel .api-key-section .key-row input {
-            flex: 1;
-            font-family: monospace;
-            font-size: 13px;
-        }
-        .admin-panel .api-key-section .key-row button {
-            padding: 8px 16px;
-            background: #27ae60;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            white-space: nowrap;
-        }
-        .admin-panel .api-key-section .key-row button:hover { background: #219a52; }
-        .admin-panel .api-key-section .key-list {
-            margin-top: 8px;
-            font-size: 13px;
-            color: #666;
-        }
-        .admin-panel .api-key-section .key-list .key-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 4px 0;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        .admin-panel .api-key-section .key-list .key-item .del-btn {
-            color: #e74c3c;
-            cursor: pointer;
-            font-size: 12px;
-            background: none;
-            border: none;
-        }
-        .admin-panel .api-key-section .key-list .key-item .del-btn:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
@@ -526,7 +558,7 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         <h1 id="headerTitle">📧 邮件管理</h1>
         <div>
             <span class="badge" id="userBadge">👤 </span>
-            <span class="badge" onclick="logout()" style="cursor:pointer;margin-left:8px;">🚪 退出</span>
+            <span class="badge clickable" onclick="logout()">🚪 退出</span>
         </div>
     </header>
 
@@ -562,19 +594,6 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
                     <input id="adminNewPassword" type="password" placeholder="留空不修改" />
                 </div>
                 <button class="save-btn" onclick="saveAdminSettings()">保存设置</button>
-
-                <!-- API Key 管理 -->
-                <div class="api-key-section">
-                    <h4 style="font-size:14px;margin-bottom:8px;">🔑 API Key</h4>
-                    <div class="key-row">
-                        <input id="apiKeyDisplay" readonly placeholder="点击生成新 Key" />
-                        <button onclick="generateApiKey()">生成新 Key</button>
-                    </div>
-                    <div id="apiKeyList" class="key-list"></div>
-                    <div style="font-size:12px;color:#999;margin-top:4px;">
-                        用于程序调用 API，请求头携带 <code>Authorization: Bearer &lt;KEY&gt;</code>
-                    </div>
-                </div>
             </div>
 
             <h2>📊 统计</h2>
@@ -734,8 +753,8 @@ async function login() {
             showError('loginError', data.error || '登录失败');
             return;
         }
-        // Cookie 由服务端设置，前端只需要刷新页面
-        location.reload();
+        document.cookie = 'session=' + data.sessionId + '; path=/; max-age=604800';
+        loadMainApp();
     } catch (e) {
         showError('loginError', '网络错误，请重试');
     }
@@ -786,8 +805,6 @@ async function register() {
 // 退出
 // ============================================================
 async function logout() {
-    // 调用后端退出接口清除 session
-    await fetch('/logout', { method: 'POST' });
     document.cookie = 'session=; path=/; max-age=0';
     $('mainApp').style.display = 'none';
     $('loginPage').style.display = 'flex';
@@ -817,7 +834,7 @@ async function loadMainApp() {
 }
 
 // ============================================================
-// 加载用户信息
+// 加载用户信息（不显示具体管理员账号名）
 // ============================================================
 async function loadUserInfo() {
     try {
@@ -827,7 +844,6 @@ async function loadUserInfo() {
             if (data.role === 'admin') {
                 $('userBadge').textContent = '👤 管理员';
                 $('adminPanel').style.display = 'block';
-                loadApiKeys();
             } else {
                 $('userBadge').textContent = '👤 ' + data.email;
             }
@@ -836,7 +852,7 @@ async function loadUserInfo() {
 }
 
 // ============================================================
-// 加载管理员设置
+// 加载管理员设置（包含域名）
 // ============================================================
 async function loadAdminSettings() {
     try {
@@ -912,51 +928,6 @@ function copyRegCode() {
         document.execCommand('copy');
         showToast('✅ 注册码已复制');
     });
-}
-
-// ============================================================
-// API Key 管理
-// ============================================================
-async function generateApiKey() {
-    try {
-        const resp = await fetch('/admin/apikey', { method: 'POST' });
-        const data = await resp.json();
-        if (!data.success) { showToast('生成失败: ' + data.error, true); return; }
-        $('apiKeyDisplay').value = data.apiKey;
-        showToast('✅ 新 API Key 已生成（请立即复制保存）');
-        loadApiKeys();
-    } catch (e) { showToast('网络错误', true); }
-}
-
-async function loadApiKeys() {
-    try {
-        const resp = await fetch('/admin/apikeys');
-        const data = await resp.json();
-        if (data.success && data.keys && data.keys.length > 0) {
-            const list = $('apiKeyList');
-            list.innerHTML = data.keys.map(key => 
-                '<div class="key-item"><span style="font-family:monospace;font-size:12px;">' + key + '</span><button class="del-btn" onclick="deleteApiKey(\'' + key + '\')">删除</button></div>'
-            ).join('');
-        } else {
-            $('apiKeyList').innerHTML = '<span style="color:#999;">暂无 API Key</span>';
-        }
-    } catch { /* ignore */ }
-}
-
-async function deleteApiKey(key) {
-    if (!confirm('确定要删除这个 API Key 吗？')) return;
-    try {
-        const resp = await fetch('/admin/apikey', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ apiKey: key })
-        });
-        const data = await resp.json();
-        if (!data.success) { showToast('删除失败: ' + data.error, true); return; }
-        showToast('✅ 已删除');
-        loadApiKeys();
-        if ($('apiKeyDisplay').value === key) $('apiKeyDisplay').value = '';
-    } catch (e) { showToast('网络错误', true); }
 }
 
 // ============================================================
@@ -1192,14 +1163,15 @@ export default {
             const parsed = await parseEmail(raw);
             const messageId = message.headers?.get?.('Message-ID') || crypto.randomUUID();
 
-            // 垃圾邮件检测
+            // 垃圾邮件拦截
             if (parsed.isSpam) {
-                console.log(`🚫 垃圾邮件已拦截: ${parsed.subject}`);
+                console.log(`🚫 垃圾邮件已拦截: from=${parsed.from}, subject=${parsed.subject}`);
                 return;
             }
 
+            // 如果有 script 标签，日志记录（标签已在 parseEmail 中被删除）
             if (parsed.hasScript) {
-                console.log(`🗑️ 已删除 <script> 标签及其内容: ${parsed.subject}`);
+                console.log(`📝 邮件含 <script> 标签，已移除标签及内容: from=${parsed.from}`);
             }
 
             const emailData: StoredEmail = {
@@ -1235,7 +1207,7 @@ export default {
                 await env.EMAIL_USER.put(userListKey, JSON.stringify(userIds));
             }
 
-            if (env.RESEND_API_KEY && !parsed.isSpam) {
+            if (env.RESEND_API_KEY) {
                 const prefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
                 const sender = `${prefix}@${env.DOMAIN}`;
                 await sendAutoReply(env.RESEND_API_KEY, sender, parsed.from, parsed.subject);
@@ -1243,7 +1215,7 @@ export default {
                 await env.EMAIL.put(messageId, JSON.stringify(updated));
                 console.log('✅ 邮件已存储并自动回复');
             } else {
-                console.log('✅ 邮件已存储（未配置 Resend 或为垃圾邮件，跳过自动回复）');
+                console.log('✅ 邮件已存储（未配置 Resend，跳过自动回复）');
             }
         } catch (error) {
             console.error('❌ 处理邮件失败:', error);
@@ -1253,6 +1225,16 @@ export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext) {
         const url = new URL(request.url);
         const path = url.pathname;
+
+        // ============================================================
+        // 获取 Session
+        // ============================================================
+        async function getSessionFromCookie() {
+            const cookie = request.headers.get('Cookie') || '';
+            const sessionId = cookie.match(/session=([^;]+)/)?.[1];
+            if (!sessionId) return null;
+            return await getSession(env, sessionId);
+        }
 
         // ============================================================
         // 获取域名
@@ -1273,7 +1255,7 @@ export default {
         // 获取用户信息
         // ============================================================
         if (path === '/user/info') {
-            const session = await getSessionFromRequest(env, request);
+            const session = await getSessionFromCookie();
             if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
             return Response.json({ success: true, email: session.email, role: session.role });
         }
@@ -1323,7 +1305,7 @@ export default {
         }
 
         // ============================================================
-        // 登录（服务端设置安全 Cookie）
+        // 登录
         // ============================================================
         if (path === '/login' && request.method === 'POST') {
             try {
@@ -1337,13 +1319,7 @@ export default {
                 }
 
                 const sessionId = await createSession(env, email, user.role);
-                
-                return new Response(JSON.stringify({ success: true, role: user.role }), {
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Set-Cookie': `session=${sessionId}; path=/; max-age=604800; HttpOnly; Secure; SameSite=Lax`
-                    }
-                });
+                return Response.json({ success: true, role: user.role, sessionId });
             } catch (error) {
                 return Response.json({ success: false, error: String(error) }, { status: 500 });
             }
@@ -1363,7 +1339,7 @@ export default {
         // 管理员设置（GET）
         // ============================================================
         if (path === '/admin/settings' && request.method === 'GET') {
-            const session = await getSessionFromRequest(env, request);
+            const session = await getSessionFromCookie();
             if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
             if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
 
@@ -1378,7 +1354,7 @@ export default {
         // ============================================================
         if (path === '/admin/settings' && request.method === 'POST') {
             try {
-                const session = await getSessionFromRequest(env, request);
+                const session = await getSessionFromCookie();
                 if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
                 if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
 
@@ -1395,53 +1371,12 @@ export default {
         // 生成注册码
         // ============================================================
         if (path === '/admin/regcode' && request.method === 'POST') {
-            const session = await getSessionFromRequest(env, request);
+            const session = await getSessionFromCookie();
             if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
             if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
 
             const code = await generateRegCode(env);
             return Response.json({ success: true, regCode: code });
-        }
-
-        // ============================================================
-        // ===== API Key 管理 =====
-        // ============================================================
-
-        // 生成 API Key
-        if (path === '/admin/apikey' && request.method === 'POST') {
-            const session = await getSessionFromRequest(env, request);
-            if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
-            if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
-
-            const apiKey = await createApiKey(env, session.email, session.role);
-            await addApiKeyToList(env, session.email, apiKey);
-            return Response.json({ success: true, apiKey });
-        }
-
-        // 列出 API Key
-        if (path === '/admin/apikeys' && request.method === 'GET') {
-            const session = await getSessionFromRequest(env, request);
-            if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
-            if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
-
-            const keys = await listApiKeys(env, session.email);
-            return Response.json({ success: true, keys });
-        }
-
-        // 删除 API Key
-        if (path === '/admin/apikey' && request.method === 'DELETE') {
-            try {
-                const session = await getSessionFromRequest(env, request);
-                if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
-                if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
-
-                const body = await request.json() as { apiKey: string };
-                await deleteApiKey(env, body.apiKey);
-                await removeApiKeyFromList(env, session.email, body.apiKey);
-                return Response.json({ success: true });
-            } catch (error) {
-                return Response.json({ success: false, error: String(error) }, { status: 500 });
-            }
         }
 
         // ============================================================
@@ -1452,10 +1387,10 @@ export default {
         }
 
         // ============================================================
-        // 获取邮件列表（支持 Cookie + API Key）
+        // 获取邮件列表
         // ============================================================
         if (path === '/mails' && request.method === 'GET') {
-            const session = await getSessionFromRequest(env, request);
+            const session = await getSessionFromCookie();
             if (!session) return Response.json({ error: '未登录' }, { status: 401 });
 
             let ids: string[] = [];
@@ -1480,10 +1415,10 @@ export default {
         }
 
         // ============================================================
-        // 获取单封邮件（支持 Cookie + API Key）
+        // 获取单封邮件
         // ============================================================
         if (path.startsWith('/mail/') && request.method === 'GET') {
-            const session = await getSessionFromRequest(env, request);
+            const session = await getSessionFromCookie();
             if (!session) return Response.json({ error: '未登录' }, { status: 401 });
 
             const id = decodeURIComponent(path.split('/')[2]);
@@ -1503,10 +1438,10 @@ export default {
         }
 
         // ============================================================
-        // 删除邮件（支持 Cookie + API Key）
+        // 删除邮件
         // ============================================================
         if (path.startsWith('/mail/') && request.method === 'DELETE') {
-            const session = await getSessionFromRequest(env, request);
+            const session = await getSessionFromCookie();
             if (!session) return Response.json({ error: '未登录' }, { status: 401 });
 
             const id = decodeURIComponent(path.split('/')[2]);
@@ -1543,10 +1478,10 @@ export default {
         }
 
         // ============================================================
-        // 发送邮件（支持 Cookie + API Key）
+        // 发送邮件
         // ============================================================
         if (path === '/send' && request.method === 'POST') {
-            const session = await getSessionFromRequest(env, request);
+            const session = await getSessionFromCookie();
             if (!session) return Response.json({ error: '未登录' }, { status: 401 });
 
             if (!env.RESEND_API_KEY) {
