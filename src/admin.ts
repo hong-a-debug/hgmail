@@ -1,3 +1,4 @@
+// src/admin.ts
 import { Env } from './types';
 import { sha256 } from './utils';
 
@@ -8,16 +9,18 @@ import { sha256 } from './utils';
 export async function getAdminSettings(env: Env) {
     const title = await env.EMAIL_USER.get('admin:title') || '📧 邮件管理';
     const senderPrefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
-    return { title, senderPrefix };
+    const autoReply = await env.EMAIL_USER.get('admin:auto_reply') !== 'false';
+    return { title, senderPrefix, autoReply };
 }
 
-export async function saveAdminSettings(env: Env, title: string, senderPrefix: string) {
+export async function saveAdminSettings(env: Env, title: string, senderPrefix: string, autoReply: boolean) {
     if (title !== undefined) await env.EMAIL_USER.put('admin:title', title);
     if (senderPrefix !== undefined) await env.EMAIL_USER.put('admin:sender_prefix', senderPrefix);
+    if (autoReply !== undefined) await env.EMAIL_USER.put('admin:auto_reply', autoReply ? 'true' : 'false');
 }
 
 // ============================================================
-// 发件邮箱前缀（独立读写）
+// 发件邮箱前缀
 // ============================================================
 
 export async function getSenderPrefix(env: Env): Promise<string> {
