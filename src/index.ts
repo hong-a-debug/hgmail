@@ -1200,7 +1200,9 @@ export default {
         try {
             const raw = await new Response(message.raw).arrayBuffer();
             const parsed = await parseEmail(raw);
-            const messageId = message.headers?.get?.('Message-ID') || crypto.randomUUID();
+
+            // 生成纯字母数字的 ID（不含特殊字符）
+            const messageId = Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
 
             // 垃圾邮件拦截
             if (parsed.isSpam) {
@@ -1208,7 +1210,7 @@ export default {
                 return;
             }
 
-            // 保存附件到 R2
+            // 保存附件到 R2（使用纯字母数字的 messageId）
             const attachments = await saveAttachments(env, parsed.attachments, messageId);
 
             // 如果有 script 标签，日志记录（标签已在 parseEmail 中被删除）
@@ -1434,10 +1436,56 @@ export default {
         }
 
         // ============================================================
-        // 下载附件
+        // 下载附件（通过邮件 ID）
+        // ============================================================
+        if (path.startsWith('/download/') && request.method === 'GET') {
+            const id = decodeURIComponent(path.replace('/download/', ''));
+            if (!id) {
+                return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
+            }
+
+            const session = await getSessionFromCookie();
+            if (!session) {
+                return Response.json({ error: '未登录' }, { status: 401 });
+            }
+
+            const mailData = await env.EMAIL.get(id);
+            if (!mailData) {
+                return Response.json({ error: '邮件不存在' }, { status: 404 });
+            }
+            const mail = JSON.parse(mailData) as StoredEmail;
+
+            // 权限校验
+            if (session.role !== 'admin' && mail.to !== session.email) {
+                return Response.json({ error: '无权下载' }, { status: 403 });
+            }
+
+            if (!mail.attachments || mail.attachments.length === 0) {
+                return Response.json({ error: '该邮件没有附件' }, { status: 404 });
+            }
+
+            // 取第一个附件
+            const firstAttachment = mail.attachments[0];
+
+            // 从 R2 获取文件
+            const attachment = await getAttachment(env, firstAttachment.key);
+            if (!attachment) {
+                return Response.json({ error: '附件文件不存在' }, { status: 404 });
+            }
+
+            return new Response(attachment.content, {
+                headers: {
+                    'Content-Type': attachment.contentType,
+                    'Content-Disposition': `attachment; filename="${encodeURIComponent(attachment.filename)}"`,
+                },
+            });
+        }
+
+        // ============================================================
+        // 下载附件（通过 key）
         // ============================================================
         if (path.startsWith('/attachments/') && request.method === 'GET') {
-            const key = path.replace('/attachments/', '');
+            const key = decodeURIComponent(path.replace('/attachments/', ''));
             if (!key) {
                 return Response.json({ error: '缺少附件 ID' }, { status: 400 });
             }
