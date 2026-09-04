@@ -18,3 +18,8 @@ id = "你的id"
 [[r2_buckets]]
 binding = "ATTACHMENTS"
 bucket_name = "attachments"
+
+[build]
+  [[build.upload.rules]]
+  type = "Text"
+  globs = ["**/*.html"]
