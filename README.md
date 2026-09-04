@@ -1,22 +1,32 @@
 # 📧 邮件系统
 
-基于 Cloudflare Workers + KV + R2 + Resend 搭建的轻量级邮件收发系统，支持多用户、管理员控制面板、垃圾邮件过滤、附件存储。
+基于 Cloudflare Workers + KV + R2 + Resend 搭建的轻量级邮件收发系统，支持多用户、管理员控制面板、垃圾邮件过滤、附件存储与发送。
 
 ## ✨ 功能特性
 
 - 📥 **收件存储** - 收到的邮件自动存入 KV，随时查看
 - 📎 **附件存储** - 邮件附件自动保存到 R2，支持下载
+- 📤 **发送附件** - 写邮件时支持上传附件，通过 Resend 发送
 - 👥 **多用户支持** - 支持注册/登录，每个用户独立收件箱
 - 🔐 **权限控制** - 管理员可看全部邮件，普通用户只能看自己的
 - 🚫 **垃圾邮件过滤** - 自动拦截含中英文垃圾关键词的邮件
 - 🛡️ **Script 标签清理** - 自动删除邮件中的 `<script>` 标签及其内容
 - 🤖 **自动回复** - 收到邮件后自动回复（可在管理员面板开关）
 - 🖥️ **网页管理** - 简洁的收件箱界面，写邮件、回复、删除一键操作
-- 📤 **发送邮件** - 通过 Resend API 发送，支持 HTML 格式
 - 🔔 **实时刷新** - 收件箱每 30 秒自动刷新
 - ⚙️ **管理员面板** - 修改标题、发件邮箱、注册码、密码、自动回复开关
 - 🔐 **安全校验** - 密码和注册码均使用 SHA256 哈希存储
 - 🔌 **开放 API** - 提供 RESTful API，方便程序化调用
+- 📋 **邮件 ID 显示** - 查看邮件详情时底部显示邮件 ID，方便复制下载
+
+## 📎 附件支持
+
+| 功能 | 说明 |
+|------|------|
+| **发送附件** | 写邮件时点击"添加附件"选择文件，支持所有文件格式 |
+| **接收附件** | 邮件中的附件自动保存到 R2，详情页显示下载链接 |
+| **附件大小** | 单封邮件总大小不超过 10MB（Resend 限制） |
+| **下载方式** | 邮件详情页点击下载，或直接访问 `/download/{邮件ID}` |
 
 ## 🛡️ 安全机制
 
@@ -192,6 +202,15 @@ npx wrangler deploy --no-bundle
 | 修改管理员密码 | 更新管理员登录密码 |
 | **自动回复开关** | 开启/关闭收到邮件后的自动回复 |
 
+### 发送附件
+
+1. 点击 **写新邮件**
+2. 填写收件人、主题、内容
+3. 在附件区域点击 **添加附件**，选择文件
+4. 点击 **发送**
+
+> 💡 支持所有文件格式，单封邮件总大小不超过 10MB。
+
 ## 📖 API 接口
 
 | 接口 | 方法 | 用途 |
@@ -205,7 +224,7 @@ npx wrangler deploy --no-bundle
 | `/mails` | GET | 邮件列表（根据角色过滤） |
 | `/mail/:id` | GET | 邮件详情（含附件信息） |
 | `/mail/:id` | DELETE | 删除邮件（同时删除附件） |
-| `/send` | POST | 发送邮件 |
+| `/send` | POST | 发送邮件（支持附件） |
 | `/download/:id` | GET | 下载邮件的第一个附件 |
 | `/attachments/:key` | GET | 下载指定附件（需登录） |
 | `/admin/account` | GET | 获取管理员账号名 |
@@ -220,13 +239,15 @@ npx wrangler deploy --no-bundle
 .
 ├── src/
 │   ├── index.ts           # Worker 主入口
+│   ├── template.html      # 前端 HTML 模板
 │   ├── auth.ts            # 用户/会话管理
 │   ├── admin.ts           # 管理员设置
 │   ├── attachment.ts      # 附件处理（R2 存储）
 │   ├── utils.ts           # SHA256 工具
 │   ├── email-parser.ts    # 邮件解析 + 垃圾过滤 + Script 清理
 │   ├── resend-client.ts   # Resend 发送封装
-│   └── types.ts           # 类型定义
+│   ├── types.ts           # 类型定义
+│   └── types.d.ts         # 类型声明（HTML 模块）
 ├── wrangler.toml          # Cloudflare 配置
 ├── package.json           # 依赖管理
 ├── tsconfig.json          # TypeScript 配置
@@ -235,6 +256,18 @@ npx wrangler deploy --no-bundle
 ```
 
 ## ❓ 常见问题
+
+### Q: 附件发送失败？
+
+1. 检查单封邮件总大小是否超过 10MB
+2. 确认 Resend API Key 已配置
+3. 确认文件读取成功（浏览器控制台查看）
+
+### Q: 附件下载失败？
+
+1. 确认已登录
+2. 确认邮件包含附件
+3. 检查 R2 存储是否正常
 
 ### Q: 注册验证码邮件被拦截了怎么办？
 
@@ -278,15 +311,13 @@ npx wrangler deploy --no-bundle
 3. Resend 域名验证是否完成（仅发信需要）
 4. DNS 记录是否已生效（等待几分钟）
 
-### Q: 邮件发送失败？
-
-1. 确认已配置 Resend API Key：`npx wrangler secret put RESEND_API_KEY`
-2. 确认域名在 Resend 已验证
-3. 管理员在系统设置中确认发件邮箱前缀正确
-
 ### Q: 部署时提示 KV namespace 无效？
 
 检查 `wrangler.toml` 中 KV 的 `id` 是否正确，可以用 `npx wrangler kv:namespace list` 查看正确的 ID。
+
+### Q: 部署时提示 `template.html` 找不到？
+
+确保 `src/template.html` 文件存在，且 `tsconfig.json` 和 `wrangler.toml` 已按文档配置。
 
 ## 📝 License
 
