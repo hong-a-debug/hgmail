@@ -1062,16 +1062,27 @@ async function viewMail(id) {
         const attachmentList = $('attachmentList');
         if (attachments.length > 0) {
             attachmentContainer.style.display = 'block';
-            attachmentList.innerHTML = attachments.map(att => \`
-                <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #eee;">
-                    <span style="font-size:13px;">📎 \${escapeHtml(att.filename)}</span>
-                    <span style="font-size:11px;color:#999;">(\${(att.size / 1024).toFixed(1)} KB)</span>
-                    <a href="/attachments/\${att.key}" target="_blank" style="font-size:12px;color:#667eea;margin-left:auto;">下载</a>
-                </div>
-            \`).join('');
+            attachmentList.innerHTML = attachments.map(function(att) {
+                return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #eee;">' +
+                    '<span style="font-size:13px;">📎 ' + escapeHtml(att.filename) + '</span>' +
+                    '<span style="font-size:11px;color:#999;">(' + (att.size / 1024).toFixed(1) + ' KB)</span>' +
+                    '<a href="/attachments/' + att.key + '" target="_blank" style="font-size:12px;color:#667eea;margin-left:auto;">下载</a>' +
+                '</div>';
+            }).join('');
         } else {
             attachmentContainer.style.display = 'none';
         }
+
+        // 显示邮件 ID（最下方）
+        const modal = document.querySelector('#viewModal .modal');
+        let idDisplay = document.getElementById('mailIdDisplay');
+        if (!idDisplay) {
+            idDisplay = document.createElement('div');
+            idDisplay.id = 'mailIdDisplay';
+            idDisplay.style.cssText = 'margin-top:12px;padding:8px 12px;background:#f0f2f5;border-radius:6px;font-size:12px;color:#666;word-break:break-all;border:1px solid #e8ecf4;';
+            modal.appendChild(idDisplay);
+        }
+        idDisplay.innerHTML = '📋 邮件ID：<span style="user-select:all;cursor:pointer;color:#333;">' + mail.id + '</span>';
 
         $('viewModal').classList.add('active');
     } catch (e) { showToast('加载邮件详情失败', true); }
