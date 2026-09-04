@@ -1,3 +1,4 @@
+// src/resend-client.ts
 import { Resend } from 'resend';
 
 export async function sendEmail(
@@ -6,7 +7,8 @@ export async function sendEmail(
     to: string | string[],
     subject: string,
     html: string,
-    text?: string
+    text?: string,
+    attachments?: { filename: string; content: string }[]  // ← 新增附件参数
 ): Promise<{ id: string }> {
     const resend = new Resend(apiKey);
     
@@ -16,6 +18,7 @@ export async function sendEmail(
         subject,
         html,
         text: text || html.replace(/<[^>]*>/g, ''),
+        attachments: attachments || [],  // ← 传给 Resend
     });
 
     if (error) {
