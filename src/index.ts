@@ -2,6 +2,7 @@ import { Env, StoredEmail } from './types';
 import { parseEmail } from './email-parser';
 import { sendAutoReply, sendEmail } from './resend-client';
 import { sha256 } from './utils';
+import { saveAttachments, getAttachment, deleteAttachments } from './attachment';
 import {
     getUser,
     createUser,
@@ -34,7 +35,6 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title id="pageTitle">📧 邮件管理</title>
     <style>
-        /* ===== 全局基础样式 ===== */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -590,6 +590,18 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
                     </div>
                 </div>
                 <div class="field">
+                    <label>自动回复</label>
+                    <div style="display:flex;align-items:center;gap:16px;margin-top:4px;">
+                        <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;">
+                            <input type="radio" name="autoReply" value="on" checked /> 开启
+                        </label>
+                        <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;">
+                            <input type="radio" name="autoReply" value="off" /> 关闭
+                        </label>
+                        <span style="font-size:12px;color:#999;">关闭后收到邮件不会自动回复</span>
+                    </div>
+                </div>
+                <div class="field">
                     <label>修改管理员密码</label>
                     <input id="adminNewPassword" type="password" placeholder="留空不修改" />
                 </div>
@@ -640,6 +652,10 @@ const HTML_TEMPLATE = `<!DOCTYPE html>
         <div style="font-size:14px;color:#666;margin-bottom:8px;"><strong>发件人：</strong><span id="viewFrom">-</span></div>
         <div style="font-size:14px;color:#666;margin-bottom:16px;"><strong>时间：</strong><span id="viewTime">-</span></div>
         <div id="viewBody" style="background:#f8f9fc;padding:16px;border-radius:10px;min-height:100px;white-space:pre-wrap;line-height:1.7;">-</div>
+        <div id="viewAttachments" style="margin-top:12px;padding:12px;background:#f8f9fc;border-radius:8px;display:none;">
+            <strong style="font-size:14px;">📎 附件</strong>
+            <div id="attachmentList" style="margin-top:6px;"></div>
+        </div>
         <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
             <button class="send-btn" style="flex:1;background:#667eea;" onclick="replyFromView()">💬 回复</button>
             <button class="send-btn" style="flex:1;background:#e74c3c;" onclick="deleteFromView()">🗑️ 删除</button>
@@ -867,6 +883,10 @@ async function loadAdminSettings() {
             $('adminTitle').value = data.title || '';
             $('adminSenderPrefix').value = data.senderPrefix || 'noreply';
             $('adminRegCode').value = data.regCode || '暂无注册码';
+            // 加载自动回复状态
+            if (data.autoReply !== undefined) {
+                document.querySelector('input[name="autoReply"][value="' + (data.autoReply ? 'on' : 'off') + '"]').checked = true;
+            }
             $('headerTitle').textContent = data.title || '📧 邮件管理';
             document.title = data.title || '📧 邮件管理';
         }
@@ -880,8 +900,9 @@ async function saveAdminSettings() {
     const title = $('adminTitle').value.trim();
     const senderPrefix = $('adminSenderPrefix').value.trim();
     const newPassword = $('adminNewPassword').value.trim();
+    const autoReply = document.querySelector('input[name="autoReply"]:checked').value === 'on';
 
-    const payload = { title, senderPrefix };
+    const payload = { title, senderPrefix, autoReply };
     if (newPassword) payload.password_hash = await sha256(newPassword);
 
     try {
@@ -1022,7 +1043,7 @@ function formatTime(ts) {
 }
 
 // ============================================================
-// 查看邮件
+// 查看邮件（含附件）
 // ============================================================
 async function viewMail(id) {
     currentViewId = id;
@@ -1034,6 +1055,24 @@ async function viewMail(id) {
         $('viewFrom').textContent = mail.from || '未知';
         $('viewTime').textContent = formatTime(mail.timestamp);
         $('viewBody').innerHTML = mail.html || mail.text || '(无内容)';
+
+        // 显示附件
+        const attachments = mail.attachments || [];
+        const attachmentContainer = $('viewAttachments');
+        const attachmentList = $('attachmentList');
+        if (attachments.length > 0) {
+            attachmentContainer.style.display = 'block';
+            attachmentList.innerHTML = attachments.map(att => \`
+                <div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #eee;">
+                    <span style="font-size:13px;">📎 \${escapeHtml(att.filename)}</span>
+                    <span style="font-size:11px;color:#999;">(\${(att.size / 1024).toFixed(1)} KB)</span>
+                    <a href="/attachments/\${att.key}" target="_blank" style="font-size:12px;color:#667eea;margin-left:auto;">下载</a>
+                </div>
+            \`).join('');
+        } else {
+            attachmentContainer.style.display = 'none';
+        }
+
         $('viewModal').classList.add('active');
     } catch (e) { showToast('加载邮件详情失败', true); }
 }
@@ -1169,6 +1208,9 @@ export default {
                 return;
             }
 
+            // 保存附件到 R2
+            const attachments = await saveAttachments(env, parsed.attachments, messageId);
+
             // 如果有 script 标签，日志记录（标签已在 parseEmail 中被删除）
             if (parsed.hasScript) {
                 console.log(`📝 邮件含 <script> 标签，已移除标签及内容: from=${parsed.from}`);
@@ -1182,11 +1224,13 @@ export default {
                 timestamp: new Date().toISOString(),
                 text: parsed.text,
                 html: parsed.html,
+                attachments: attachments,
                 status: 'received',
             };
 
             await env.EMAIL.put(messageId, JSON.stringify(emailData), { expirationTtl: 30 * 24 * 60 * 60 });
 
+            // 全局邮件索引
             const idsJson = await env.EMAIL.get('_mail_ids');
             let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
             ids.push(messageId);
@@ -1197,6 +1241,7 @@ export default {
             }
             await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
 
+            // 用户邮件列表
             const recipients = parsed.to.split(',').map(r => r.trim());
             for (const recipient of recipients) {
                 const userListKey = `user:${recipient}:list`;
@@ -1207,7 +1252,9 @@ export default {
                 await env.EMAIL_USER.put(userListKey, JSON.stringify(userIds));
             }
 
-            if (env.RESEND_API_KEY) {
+            // 自动回复（检查开关）
+            const autoReplyEnabled = await env.EMAIL_USER.get('admin:auto_reply') !== 'false';
+            if (env.RESEND_API_KEY && autoReplyEnabled) {
                 const prefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
                 const sender = `${prefix}@${env.DOMAIN}`;
                 await sendAutoReply(env.RESEND_API_KEY, sender, parsed.from, parsed.subject);
@@ -1215,7 +1262,7 @@ export default {
                 await env.EMAIL.put(messageId, JSON.stringify(updated));
                 console.log('✅ 邮件已存储并自动回复');
             } else {
-                console.log('✅ 邮件已存储（未配置 Resend，跳过自动回复）');
+                console.log(`✅ 邮件已存储（自动回复: ${autoReplyEnabled ? '已配置 Resend' : '已关闭'}）`);
             }
         } catch (error) {
             console.error('❌ 处理邮件失败:', error);
@@ -1358,8 +1405,8 @@ export default {
                 if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
                 if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
 
-                const body = await request.json() as { title: string; senderPrefix: string; password_hash?: string };
-                await saveAdminSettings(env, body.title, body.senderPrefix);
+                const body = await request.json() as { title: string; senderPrefix: string; autoReply: boolean; password_hash?: string };
+                await saveAdminSettings(env, body.title, body.senderPrefix, body.autoReply);
                 if (body.password_hash) await setAdminPasswordHash(env, body.password_hash);
                 return Response.json({ success: true });
             } catch (error) {
@@ -1384,6 +1431,44 @@ export default {
         // ============================================================
         if (path === '/check-resend') {
             return Response.json({ configured: !!env.RESEND_API_KEY });
+        }
+
+        // ============================================================
+        // 下载附件
+        // ============================================================
+        if (path.startsWith('/attachments/') && request.method === 'GET') {
+            const key = path.replace('/attachments/', '');
+            if (!key) {
+                return Response.json({ error: '缺少附件 ID' }, { status: 400 });
+            }
+
+            const session = await getSessionFromCookie();
+            if (!session) {
+                return Response.json({ error: '未登录' }, { status: 401 });
+            }
+
+            const attachment = await getAttachment(env, key);
+            if (!attachment) {
+                return Response.json({ error: '附件不存在' }, { status: 404 });
+            }
+
+            // 验证权限
+            const messageId = key.split('/')[0];
+            const mailData = await env.EMAIL.get(messageId);
+            if (!mailData) {
+                return Response.json({ error: '邮件不存在' }, { status: 404 });
+            }
+            const mail = JSON.parse(mailData) as StoredEmail;
+            if (session.role !== 'admin' && mail.to !== session.email) {
+                return Response.json({ error: '无权下载' }, { status: 403 });
+            }
+
+            return new Response(attachment.content, {
+                headers: {
+                    'Content-Type': attachment.contentType,
+                    'Content-Disposition': `attachment; filename="${encodeURIComponent(attachment.filename)}"`,
+                },
+            });
         }
 
         // ============================================================
@@ -1438,7 +1523,7 @@ export default {
         }
 
         // ============================================================
-        // 删除邮件
+        // 删除邮件（同时删除附件）
         // ============================================================
         if (path.startsWith('/mail/') && request.method === 'DELETE') {
             const session = await getSessionFromCookie();
@@ -1457,6 +1542,15 @@ export default {
                 }
             }
 
+            // 删除邮件内容
+            await env.EMAIL.delete(id);
+
+            // 删除附件
+            if (mail.attachments && mail.attachments.length > 0) {
+                await deleteAttachments(env, id);
+            }
+
+            // 从索引中移除
             const idsJson = await env.EMAIL.get('_mail_ids');
             let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
             ids = ids.filter(i => i !== id);
@@ -1468,10 +1562,6 @@ export default {
                 let userIds: string[] = userIdsJson ? JSON.parse(userIdsJson) : [];
                 userIds = userIds.filter(i => i !== id);
                 await env.EMAIL_USER.put(userListKey, JSON.stringify(userIds));
-            }
-
-            if (session.role === 'admin') {
-                await env.EMAIL.delete(id);
             }
 
             return Response.json({ success: true });
