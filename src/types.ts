@@ -8,7 +8,16 @@ export interface StoredEmail {
     timestamp: string;
     text: string;
     html?: string;
+    attachments?: AttachmentInfo[];
     status: 'received' | 'replied' | 'forwarded';
+}
+
+export interface AttachmentInfo {
+    filename: string;
+    content_type: string;
+    size: number;
+    url: string;
+    key: string;
 }
 
 export interface User {
@@ -25,9 +34,10 @@ export interface Session {
 }
 
 export interface Env {
-    EMAIL: KVNamespace;          // 邮件存储
-    EMAIL_USER: KVNamespace;     // 用户存储
+    EMAIL: KVNamespace;
+    EMAIL_USER: KVNamespace;
+    ATTACHMENTS: R2Bucket;
     RESEND_API_KEY: string;
     DOMAIN: string;
-    ADMIN_ACCOUNT: string;       // 普通变量
+    ADMIN_ACCOUNT: string;
 }
