@@ -6,8 +6,9 @@
     "strict": true,
     "skipLibCheck": true,
     "outDir": "dist",
+    "rootDir": "./src",
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "src/**/*.d.ts"],
   "exclude": ["node_modules"]
 }
