@@ -14,3 +14,7 @@ id = "你的id"
 [[kv_namespaces]]
 binding = "EMAIL_USER"
 id = "你的id"
+
+[[r2_buckets]]
+binding = "ATTACHMENTS"
+bucket_name = "attachments"
