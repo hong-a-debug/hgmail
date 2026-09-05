@@ -41,16 +41,13 @@ export default {
             const raw = await new Response(message.raw).arrayBuffer();
             const parsed = await parseEmail(raw);
 
-            // 生成纯字母数字的 ID
             const messageId = Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
 
-            // 垃圾邮件拦截
             if (parsed.isSpam) {
                 console.log(`🚫 垃圾邮件已拦截: from=${parsed.from}, subject=${parsed.subject}`);
                 return;
             }
 
-            // 保存附件到 R2
             const attachments = await saveAttachments(env, parsed.attachments, messageId);
 
             if (parsed.hasScript) {
@@ -71,7 +68,6 @@ export default {
 
             await env.EMAIL.put(messageId, JSON.stringify(emailData), { expirationTtl: 30 * 24 * 60 * 60 });
 
-            // 全局邮件索引
             const idsJson = await env.EMAIL.get('_mail_ids');
             let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
             ids.push(messageId);
@@ -82,7 +78,6 @@ export default {
             }
             await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
 
-            // 用户邮件列表
             const recipients = parsed.to.split(',').map(r => r.trim());
             for (const recipient of recipients) {
                 const userListKey = `user:${recipient}:list`;
@@ -93,7 +88,6 @@ export default {
                 await env.EMAIL_USER.put(userListKey, JSON.stringify(userIds));
             }
 
-            // 自动回复（检查开关）
             const autoReplyEnabled = await env.EMAIL_USER.get('admin:auto_reply') !== 'false';
             if (env.RESEND_API_KEY && autoReplyEnabled) {
                 const prefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
@@ -119,6 +113,36 @@ export default {
             const sessionId = cookie.match(/session=([^;]+)/)?.[1];
             if (!sessionId) return null;
             return await getSession(env, sessionId);
+        }
+
+        // ============================================================
+        // 管理员初始化（合并 account + domain + settings）
+        // ============================================================
+        if (path === '/admin/init') {
+            const session = await getSessionFromCookie();
+            const result: any = {
+                account: env.ADMIN_ACCOUNT || 'admin',
+                domain: env.DOMAIN,
+                isLoggedIn: false,
+            };
+
+            if (session) {
+                result.isLoggedIn = true;
+                result.user = {
+                    email: session.email,
+                    role: session.role,
+                };
+                const settings = await getAdminSettings(env);
+                const regCodePlain = await env.EMAIL_USER.get('admin:regcode_plain');
+                result.settings = {
+                    title: settings.title || '📧 邮件管理',
+                    senderPrefix: settings.senderPrefix || 'noreply',
+                    regCode: regCodePlain || '暂无注册码',
+                    autoReply: settings.autoReply !== undefined ? settings.autoReply : true,
+                };
+            }
+
+            return Response.json(result);
         }
 
         // ============================================================
@@ -975,7 +999,7 @@ header h1 { font-size: 16px; }
 .admin-panel .field .code-row button { width: 100%; justify-content: center; }
 }`;
             return new Response(css, {
-                headers: { 
+                headers: {
                     'Content-Type': 'text/css; charset=utf-8',
                     'Cache-Control': 'public, max-age=86400'
                 },
@@ -1149,17 +1173,44 @@ async function loadMainApp() {
     $('mainApp').style.display = 'block';
 
     try {
-        const resp = await fetch('/admin/account');
+        const resp = await fetch('/admin/init');
         const data = await resp.json();
-        if (data.account) $('loginHint').textContent = '管理员账号：' + data.account;
-    } catch { /* ignore */ }
 
-    await loadUserInfo();
-    await loadAdminSettings();
-    await loadMails();
-    await checkResend();
-    if (refreshInterval) clearInterval(refreshInterval);
-    refreshInterval = setInterval(loadMails, 30000);
+        if (data.account) $('loginHint').textContent = '管理员账号：' + data.account;
+        if (data.domain) $('adminSenderDomain').textContent = data.domain;
+
+        if (data.isLoggedIn && data.user) {
+            if (data.user.role === 'admin') {
+                $('userBadge').textContent = '👤 管理员';
+                $('adminPanel').style.display = 'block';
+            } else {
+                $('userBadge').textContent = '👤 ' + data.user.email;
+            }
+
+            if (data.settings) {
+                $('adminTitle').value = data.settings.title || '';
+                $('adminSenderPrefix').value = data.settings.senderPrefix || 'noreply';
+                $('adminRegCode').value = data.settings.regCode || '暂无注册码';
+                if (data.settings.autoReply !== undefined) {
+                    document.querySelector('input[name="autoReply"][value="' + (data.settings.autoReply ? 'on' : 'off') + '"]').checked = true;
+                }
+                $('headerTitle').textContent = data.settings.title || '📧 邮件管理';
+                document.title = data.settings.title || '📧 邮件管理';
+            }
+        }
+
+        await Promise.all([loadMails(), checkResend()]);
+        if (refreshInterval) clearInterval(refreshInterval);
+        refreshInterval = setInterval(loadMails, 30000);
+    } catch (e) {
+        console.error('加载失败，使用降级方案:', e);
+        await loadUserInfo();
+        await loadAdminSettings();
+        await loadMails();
+        await checkResend();
+        if (refreshInterval) clearInterval(refreshInterval);
+        refreshInterval = setInterval(loadMails, 30000);
+    }
 }
 
 // ============================================================
@@ -1196,7 +1247,6 @@ async function loadAdminSettings() {
             $('adminTitle').value = data.title || '';
             $('adminSenderPrefix').value = data.senderPrefix || 'noreply';
             $('adminRegCode').value = data.regCode || '暂无注册码';
-            // 加载自动回复状态
             if (data.autoReply !== undefined) {
                 document.querySelector('input[name="autoReply"][value="' + (data.autoReply ? 'on' : 'off') + '"]').checked = true;
             }
@@ -1375,7 +1425,6 @@ async function viewMail(id) {
         $('viewTime').textContent = formatTime(mail.timestamp);
         $('viewBody').innerHTML = mail.html || mail.text || '(无内容)';
 
-        // 显示附件
         const attachments = mail.attachments || [];
         const attachmentContainer = $('viewAttachments');
         const attachmentList = $('attachmentList');
@@ -1392,7 +1441,6 @@ async function viewMail(id) {
             attachmentContainer.style.display = 'none';
         }
 
-        // 显示邮件 ID（最下方）
         const modal = document.querySelector('#viewModal .modal');
         let idDisplay = document.getElementById('mailIdDisplay');
         if (!idDisplay) {
@@ -1584,7 +1632,7 @@ document.addEventListener('keydown', function(e) {
     }
 });`;
             return new Response(js, {
-                headers: { 
+                headers: {
                     'Content-Type': 'application/javascript; charset=utf-8',
                     'Cache-Control': 'public, max-age=86400'
                 },
