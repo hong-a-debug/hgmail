@@ -116,7 +116,7 @@ export default {
         }
 
         // ============================================================
-        // 管理员初始化（合并 account + domain + settings）
+        // 管理员初始化（合并 account + domain + settings + resend）
         // ============================================================
         if (path === '/admin/init') {
             const session = await getSessionFromCookie();
@@ -124,6 +124,7 @@ export default {
                 account: env.ADMIN_ACCOUNT || 'admin',
                 domain: env.DOMAIN,
                 isLoggedIn: false,
+                resendConfigured: !!env.RESEND_API_KEY,  // ← 新增
             };
 
             if (session) {
@@ -1179,6 +1180,10 @@ async function loadMainApp() {
         if (data.account) $('loginHint').textContent = '管理员账号：' + data.account;
         if (data.domain) $('adminSenderDomain').textContent = data.domain;
 
+        // 直接从 init 获取 Resend 状态
+        resendConfigured = data.resendConfigured || false;
+        updateSendButtonVisibility();
+
         if (data.isLoggedIn && data.user) {
             if (data.user.role === 'admin') {
                 $('userBadge').textContent = '👤 管理员';
@@ -1199,7 +1204,8 @@ async function loadMainApp() {
             }
         }
 
-        await Promise.all([loadMails(), checkResend()]);
+        // 只加载邮件列表，不再需要 checkResend
+        await loadMails();
         if (refreshInterval) clearInterval(refreshInterval);
         refreshInterval = setInterval(loadMails, 30000);
     } catch (e) {
