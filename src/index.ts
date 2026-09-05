@@ -489,8 +489,7 @@ export default {
         }
 
         if (path === '/style.css') {
-            const css = `
-* { margin: 0; padding: 0; box-sizing: border-box; }
+            const css = `* { margin: 0; padding: 0; box-sizing: border-box; }
 body {
 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 background: #f0f2f5;
@@ -974,8 +973,7 @@ header h1 { font-size: 16px; }
 .admin-panel .field .code-row { flex-direction: column; }
 .admin-panel .field .code-row input { width: 100%; }
 .admin-panel .field .code-row button { width: 100%; justify-content: center; }
-}
-        `;
+}`;
             return new Response(css, {
                 headers: { 
                     'Content-Type': 'text/css; charset=utf-8',
@@ -985,11 +983,7 @@ header h1 { font-size: 16px; }
         }
 
         if (path === '/app.js') {
-            const js = `
-// ============================================================
-// 工具函数
-// ============================================================
-const $ = id => document.getElementById(id);
+            const js = `const $ = id => document.getElementById(id);
 
 function showToast(msg, isError = false) {
     const t = $('toast');
@@ -1588,8 +1582,7 @@ document.addEventListener('keydown', function(e) {
         if ($('loginPage').style.display !== 'none') login();
         else if ($('registerPage').style.display !== 'none') register();
     }
-});
-        `;
+});`;
             return new Response(js, {
                 headers: { 
                     'Content-Type': 'application/javascript; charset=utf-8',
