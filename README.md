@@ -17,7 +17,6 @@
 - ⚙️ **管理员面板** - 修改标题、发件邮箱、注册码、密码、自动回复开关
 - 🔐 **安全校验** - 密码和注册码均使用 SHA256 哈希存储
 - 🔌 **开放 API** - 提供 RESTful API，方便程序化调用
-- 📋 **邮件 ID 显示** - 查看邮件详情时底部显示邮件 ID，方便复制下载
 
 ## 📎 附件支持
 
@@ -27,6 +26,80 @@
 | **接收附件** | 邮件中的附件自动保存到 R2，详情页显示下载链接 |
 | **附件大小** | 单封邮件总大小不超过 10MB（Resend 限制） |
 | **下载方式** | 邮件详情页点击下载，或直接访问 `/download/{邮件ID}` |
+
+## 🚫 不想用 R2 怎么办？
+
+R2 是 Cloudflare 的对象存储服务，用于保存邮件附件。如果你不想用 R2，或者账户没有开通 R2，可以按下面的方式处理。
+
+### 影响对比
+
+| 功能 | 有 R2 | 没有 R2 |
+|------|-------|---------|
+| 接收邮件 | ✅ 正常 | ✅ 正常 |
+| 发送邮件 | ✅ 正常 | ✅ 正常 |
+| 网页管理 | ✅ 正常 | ✅ 正常 |
+| 接收附件 | ✅ 保存到 R2 | ❌ 附件无法保存 |
+| 发送附件 | ✅ 通过 Resend 发送 | ✅ 通过 Resend 发送 |
+| 下载附件 | ✅ 从 R2 读取 | ❌ 无法下载 |
+
+**核心功能（收发纯文本邮件、网页管理）不受影响，只是收不到附件。**
+
+### 方案一：临时禁用附件功能（推荐）
+
+**第一步：修改 `src/index.ts`**
+
+找到 `email` 函数中的这一行：
+
+```typescript
+const attachments = await saveAttachments(env, parsed.attachments, messageId);
+```
+
+改成：
+
+```typescript
+const attachments = [];  // 不保存附件
+```
+
+**第二步：修改 `wrangler.toml`**
+
+删掉 R2 配置：
+
+```toml
+# 删掉这段
+# [[r2_buckets]]
+# binding = "ATTACHMENTS"
+# bucket_name = "attachments"
+```
+
+**第三步：重新部署**
+
+```bash
+wrangler deploy
+```
+
+这样部署时不会报 R2 相关错误，系统只处理纯文本邮件。
+
+### 方案二：用 KV 存小附件（不推荐）
+
+KV 也能存文件，但有严格限制：
+
+| 限制 | 说明 |
+|------|------|
+| 单个值最大 25MB | 推荐 1MB 以内 |
+| 读取有延迟 | 比 R2 慢 |
+| 费用更高 | KV 读写都收费 |
+
+如果只是临时存很小的附件，可以改 `src/attachment.ts`，把 `env.ATTACHMENTS` 换成 `env.EMAIL`。但**生产环境强烈推荐 R2**。
+
+### 方案三：开通 R2（推荐）
+
+R2 是 Cloudflare 的免费服务，开通不需要花钱：
+
+```bash
+npx wrangler r2 bucket create attachments
+```
+
+免费额度：**10GB 存储/月，读取不收费**。对于个人邮件系统完全够用。
 
 ## 🛡️ 安全机制
 
@@ -60,6 +133,7 @@
 | Cloudflare 账号 | 免费注册 | ✅ |
 | 一个域名 | 托管在 Cloudflare 上 | ✅ |
 | Resend 账号 | 用于发送邮件 | ⚠️ 发信需要 |
+| R2 存储桶 | 用于保存附件 | ⚠️ 收附件需要 |
 | Node.js 环境 | 本地部署需要，版本 >= 18 | ⚠️ 本地部署需要 |
 
 ## 🚀 部署教程
@@ -94,7 +168,7 @@ binding = "EMAIL_USER"
 id = "你复制的EMAIL_USER_ID"
 ```
 
-### 第三步：创建 R2 存储桶（用于附件）
+### 第三步：创建 R2 存储桶（可选，收附件需要）
 
 ```bash
 npx wrangler r2 bucket create attachments
@@ -107,6 +181,8 @@ npx wrangler r2 bucket create attachments
 binding = "ATTACHMENTS"
 bucket_name = "attachments"
 ```
+
+> 💡 不想用 R2？看上面的「不想用 R2 怎么办？」章节。
 
 ### 第四步：设置 Resend API Key（可选，发信需要）
 
@@ -143,10 +219,6 @@ npx wrangler deploy
 ```bash
 npx wrangler deploy --no-bundle
 ```
-
-### ⚠️ 部署时出现警告？
-
-如果你之前在 Cloudflare 网页控制台绑定了自定义域名，部署时可能会看到配置不一致的警告，输入 `Y` 按回车继续即可。
 
 ### 第七步：配置邮件路由
 
@@ -220,6 +292,7 @@ npx wrangler deploy --no-bundle
 | `/login` | POST | 用户登录 |
 | `/logout` | POST | 退出登录 |
 | `/user/info` | GET | 获取当前用户信息 |
+| `/admin/init` | GET | 管理员初始化（合并多个接口） |
 | `/admin/check` | GET | 检查是否有管理员 |
 | `/mails` | GET | 邮件列表（根据角色过滤） |
 | `/mail/:id` | GET | 邮件详情（含附件信息） |
@@ -257,6 +330,14 @@ npx wrangler deploy --no-bundle
 
 ## ❓ 常见问题
 
+### Q: 不想用 R2，怎么部署？
+
+删掉 `wrangler.toml` 中的 R2 配置，并把 `src/index.ts` 中 `saveAttachments` 调用改成 `const attachments = []`。详见「不想用 R2 怎么办？」章节。
+
+### Q: 部署时提示 R2 bucket 无效？
+
+说明你的账户没有创建 R2 存储桶。运行 `npx wrangler r2 bucket create attachments` 创建，或者按「不想用 R2 怎么办？」禁用附件功能。
+
 ### Q: 附件发送失败？
 
 1. 检查单封邮件总大小是否超过 10MB
@@ -273,23 +354,9 @@ npx wrangler deploy --no-bundle
 
 系统已内置白名单，包含 `验证码`、`激活`、`注册`、`verify`、`register` 等关键词的邮件不会被拦截。如果仍有误拦，可以手动在 `src/email-parser.ts` 的 `SAFE_KEYWORDS` 数组中添加关键词，重新部署即可。
 
-### Q: 如何添加更多垃圾关键词？
-
-在 `src/email-parser.ts` 的 `SPAM_KEYWORDS` 数组中添加关键词（中英文均可），重新部署即可。
-
 ### Q: 邮件中的 `<script>` 标签会被执行吗？
 
 **不会。** 系统会自动检测并删除所有 `<script>` 标签及其内容，确保邮件安全。
-
-### Q: 附件存在哪里？
-
-附件存储在 Cloudflare R2 存储中。R2 不收取出口流量费用，适合存储邮件附件。免费额度为 10GB 存储/月。
-
-### Q: 如何下载附件？
-
-两种方式：
-1. 在邮件详情页点击附件旁的 **下载** 按钮
-2. 直接访问 `/download/{邮件ID}` 下载第一个附件
 
 ### Q: 如何关闭自动回复？
 
@@ -314,10 +381,6 @@ npx wrangler deploy --no-bundle
 ### Q: 部署时提示 KV namespace 无效？
 
 检查 `wrangler.toml` 中 KV 的 `id` 是否正确，可以用 `npx wrangler kv:namespace list` 查看正确的 ID。
-
-### Q: 部署时提示 `template.html` 找不到？
-
-确保 `src/template.html` 文件存在，且 `tsconfig.json` 和 `wrangler.toml` 已按文档配置。
 
 ## 📝 License
 
