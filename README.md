@@ -128,6 +128,8 @@ npx wrangler r2 bucket create attachments
 
 ## 🎯 部署前准备
 
+> 📖 详细的准备说明，请看 **[部署前准备文档](./README_.md)**
+
 | 材料 | 说明 | 是否必需 |
 |------|------|---------|
 | Cloudflare 账号 | 免费注册 | ✅ |
@@ -135,6 +137,8 @@ npx wrangler r2 bucket create attachments
 | Resend 账号 | 用于发送邮件 | ⚠️ 发信需要 |
 | R2 存储桶 | 用于保存附件 | ⚠️ 收附件需要 |
 | Node.js 环境 | 本地部署需要，版本 >= 18 | ⚠️ 本地部署需要 |
+
+**[👉 点击查看完整的部署前准备文档](https://github.com/hong-a-debug/hgmail/blob/main/README_.md)**
 
 ## 🚀 部署教程
 
