@@ -310,27 +310,49 @@ npx wrangler deploy --no-bundle
 | `/admin/regcode` | POST | 生成注册码 |
 | `/check-resend` | GET | 检查 Resend 是否配置 |
 
+
 ## 📁 项目结构
 
 ```
 .
 ├── src/
-│   ├── index.ts           # Worker 主入口
+│   ├── index.ts           # Worker 主入口（路由 + 入口）
 │   ├── template.html      # 前端 HTML 模板
 │   ├── auth.ts            # 用户/会话管理
 │   ├── admin.ts           # 管理员设置
 │   ├── attachment.ts      # 附件处理（R2 存储）
-│   ├── utils.ts           # SHA256 工具
 │   ├── email-parser.ts    # 邮件解析 + 垃圾过滤 + Script 清理
 │   ├── resend-client.ts   # Resend 发送封装
+│   ├── utils.ts           # SHA256 工具
 │   ├── types.ts           # 类型定义
 │   └── types.d.ts         # 类型声明（HTML 模块）
 ├── wrangler.toml          # Cloudflare 配置
 ├── package.json           # 依赖管理
 ├── tsconfig.json          # TypeScript 配置
 ├── README.md              # 项目说明
+├── README_.md             # 部署前准备详细文档
 └── 部署.bat               # Windows 一键部署脚本（双击运行）
 ```
+
+### 各文件说明
+
+| 文件 | 作用 |
+|------|------|
+| `index.ts` | Worker 主入口，处理所有 HTTP 请求和邮件接收 |
+| `template.html` | 前端页面结构（HTML 骨架） |
+| `auth.ts` | 用户注册、登录、会话管理 |
+| `admin.ts` | 管理员设置（标题、发件邮箱、注册码等） |
+| `attachment.ts` | 附件保存到 R2、读取、删除 |
+| `email-parser.ts` | 解析邮件内容、垃圾过滤、删除 `<script>` 标签 |
+| `resend-client.ts` | 封装 Resend API，发送邮件和自动回复 |
+| `utils.ts` | SHA256 哈希工具 |
+| `types.ts` | TypeScript 类型定义 |
+| `types.d.ts` | 声明 `.html` 模块类型 |
+| `wrangler.toml` | Cloudflare Workers 配置 |
+| `package.json` | 项目依赖和脚本 |
+| `tsconfig.json` | TypeScript 编译配置 |
+| `README_.md` | 部署前准备详细文档 |
+| `部署.bat` | Windows 一键部署脚本 |
 
 ## ❓ 常见问题
 
