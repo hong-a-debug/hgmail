@@ -276,6 +276,31 @@ npm -v     # 显示 10.x.x
 
 ---
 
+## 📁 项目结构
+
+```
+.
+├── src/
+│   ├── index.ts           # Worker 主入口
+│   ├── template.html      # 前端 HTML 模板
+│   ├── auth.ts            # 用户/会话管理
+│   ├── admin.ts           # 管理员设置
+│   ├── attachment.ts      # 附件处理（R2 存储）
+│   ├── email-parser.ts    # 邮件解析 + 垃圾过滤
+│   ├── resend-client.ts   # Resend 发送封装
+│   ├── utils.ts           # SHA256 工具
+│   ├── types.ts           # 类型定义
+│   └── types.d.ts         # HTML 模块类型声明
+├── wrangler.toml          # Cloudflare 配置
+├── package.json           # 依赖管理
+├── tsconfig.json          # TypeScript 配置
+├── README.md              # 主文档
+├── README_.md             # 部署前准备文档（本文件）
+└── 部署.bat               # Windows 一键部署脚本
+```
+
+---
+
 ## 🚀 下一步
 
 所有材料准备好后，回到 [主 README](./README.md) 继续部署。
