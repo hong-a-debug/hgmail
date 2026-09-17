@@ -1010,12 +1010,15 @@ header h1 { font-size: 16px; }
         if (path === '/app.js') {
         const js = `const style = "color: red; font-size: 60px; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);";
 
-setInterval(function() {
+function warn() {
 console.log(
-    "%c请不要在这里复制或粘贴任何代码，如果有人想要让你复制，那么它极大概率是骗子",
-    style
+"%c请不要在这里复制或粘贴任何代码，如果有人想要让你复制，那么他是骗子",
+style
 );
-}, 10000);
+}
+
+warn();
+setInterval(warn, 10000); 
 
 const $ = id => document.getElementById(id);
 
