@@ -333,7 +333,7 @@ export default {
             return new Response(attachment.content, {
                 headers: {
                     'Content-Type': attachment.contentType,
-                    'Content-Disposition': `attachment; filename="${encodeURIComponent(attachment.filename)}"`,
+                    'Content-Disposition': `attachment; filename="${encodeURIComponent(attachment.filename)}"; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`,
                 },
             });
         }
@@ -370,7 +370,7 @@ export default {
             return new Response(attachment.content, {
                 headers: {
                     'Content-Type': attachment.contentType,
-                    'Content-Disposition': `attachment; filename="${encodeURIComponent(attachment.filename)}"`,
+                    'Content-Disposition': `attachment; filename="${encodeURIComponent(attachment.filename)}"; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`,
                 },
             });
         }
