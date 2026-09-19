@@ -1433,16 +1433,17 @@ async function viewMail(id) {
         $('viewTime').textContent = formatTime(mail.timestamp);
         $('viewBody').innerHTML = mail.html || mail.text || '(无内容)';
 
+        // 显示附件
         const attachments = mail.attachments || [];
         const attachmentContainer = $('viewAttachments');
-        const attachmentList = $('attachmentList');
+        const attachmentList = $('viewAttachmentList');  // ← 改这里
         if (attachments.length > 0) {
             attachmentContainer.style.display = 'block';
             attachmentList.innerHTML = attachments.map(function(att) {
                 return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #eee;">' +
                     '<span style="font-size:13px;">📎 ' + escapeHtml(att.filename) + '</span>' +
                     '<span style="font-size:11px;color:#999;">(' + (att.size / 1024).toFixed(1) + ' KB)</span>' +
-                    '<a href="/attachments/' + att.key + '" target="_blank" style="font-size:12px;color:#667eea;margin-left:auto;">下载</a>' +
+                    '<a href="/attachments/' + encodeURIComponent(att.key) + '" target="_blank" style="font-size:12px;color:#667eea;margin-left:auto;">下载</a>' +
                 '</div>';
             }).join('');
         } else {
