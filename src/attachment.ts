@@ -36,15 +36,24 @@ export async function saveAttachments(
                 }
             });
 
+            let size = 0;
+            if (att.content instanceof ArrayBuffer) {
+                size = att.content.byteLength;
+            } else if (att.content instanceof Uint8Array) {
+                size = att.content.length;
+            } else if (att.content) {
+                size = Math.ceil(att.content.length * 3 / 4);
+            }
+
             saved.push({
                 filename: att.filename || `attachment_${i}`,
                 content_type: contentType,
-                size: att.size || 0,
+                size: size,
                 url: `/attachments/${key}`,
                 key: key
             });
 
-            console.log(`📎 附件已保存: ${att.filename}`);
+            console.log(`📎 附件已保存: ${att.filename} (${(size / 1024).toFixed(1)} KB)`);
         } catch (error) {
             console.error(`❌ 保存附件失败: ${att.filename}`, error);
         }
