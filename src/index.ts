@@ -116,34 +116,76 @@ export default {
         }
 
         // ============================================================
-        // 管理员初始化（合并 account + domain + settings + resend）
+        // 未登录：获取公开信息（标题、域名）
         // ============================================================
-        if (path === '/admin/init') {
-            const session = await getSessionFromCookie();
-            const result: any = {
+        if (path === '/no-login/info') {
+            const settings = await getAdminSettings(env);
+            return Response.json({
                 account: env.ADMIN_ACCOUNT || 'admin',
                 domain: env.DOMAIN,
+                title: settings.title || '📧 邮件管理',
                 isLoggedIn: false,
-                resendConfigured: !!env.RESEND_API_KEY,  // ← 新增
-            };
+            });
+        }
 
-            if (session) {
-                result.isLoggedIn = true;
-                result.user = {
+        // ============================================================
+        // 已登录：获取用户信息 + 标题 + 域名
+        // ============================================================
+        if (path === '/user/info') {
+            const session = await getSessionFromCookie();
+            if (!session) {
+                return Response.json({ success: false, error: '未登录' }, { status: 401 });
+            }
+
+            const settings = await getAdminSettings(env);
+
+            return Response.json({
+                success: true,
+                account: env.ADMIN_ACCOUNT || 'admin',
+                domain: env.DOMAIN,
+                title: settings.title || '📧 邮件管理',
+                isLoggedIn: true,
+                resendConfigured: !!env.RESEND_API_KEY,
+                user: {
                     email: session.email,
                     role: session.role,
-                };
-                const settings = await getAdminSettings(env);
-                const regCodePlain = await env.EMAIL_USER.get('admin:regcode_plain');
-                result.settings = {
+                },
+            });
+        }
+
+        // ============================================================
+        // 管理员：获取用户信息 + 管理员设置
+        // ============================================================
+        if (path === '/admin/info') {
+            const session = await getSessionFromCookie();
+            if (!session) {
+                return Response.json({ success: false, error: '未登录' }, { status: 401 });
+            }
+            if (session.role !== 'admin') {
+                return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
+            }
+
+            const settings = await getAdminSettings(env);
+            const regCodePlain = await env.EMAIL_USER.get('admin:regcode_plain');
+
+            return Response.json({
+                success: true,
+                account: env.ADMIN_ACCOUNT || 'admin',
+                domain: env.DOMAIN,
+                title: settings.title || '📧 邮件管理',
+                isLoggedIn: true,
+                resendConfigured: !!env.RESEND_API_KEY,
+                user: {
+                    email: session.email,
+                    role: session.role,
+                },
+                settings: {
                     title: settings.title || '📧 邮件管理',
                     senderPrefix: settings.senderPrefix || 'noreply',
                     regCode: regCodePlain || '暂无注册码',
                     autoReply: settings.autoReply !== undefined ? settings.autoReply : true,
-                };
-            }
-
-            return Response.json(result);
+                },
+            });
         }
 
         // ============================================================
@@ -161,14 +203,6 @@ export default {
             return Response.json({ hasAdmin: adminExists === 'true' });
         }
 
-        // ============================================================
-        // 获取用户信息
-        // ============================================================
-        if (path === '/user/info') {
-            const session = await getSessionFromCookie();
-            if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
-            return Response.json({ success: true, email: session.email, role: session.role });
-        }
 
         // ============================================================
         // 获取管理员账号
@@ -330,10 +364,13 @@ export default {
                 return Response.json({ error: '附件文件不存在' }, { status: 404 });
             }
 
+            let filename = attachment.filename;
+            try { filename = decodeURIComponent(filename); } catch { /* ignore */ }
+
             return new Response(attachment.content, {
                 headers: {
                     'Content-Type': attachment.contentType,
-                    'Content-Disposition': `attachment; filename="${encodeURIComponent(attachment.filename)}"; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`,
+                    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
                 },
             });
         }
@@ -367,10 +404,13 @@ export default {
                 return Response.json({ error: '无权下载' }, { status: 403 });
             }
 
+            let filename = attachment.filename;
+            try { filename = decodeURIComponent(filename); } catch { /* ignore */ }
+
             return new Response(attachment.content, {
                 headers: {
                     'Content-Type': attachment.contentType,
-                    'Content-Disposition': `attachment; filename="${encodeURIComponent(attachment.filename)}"; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`,
+                    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
                 },
             });
         }
@@ -1008,7 +1048,12 @@ header h1 { font-size: 16px; }
         }
 
         if (path === '/app.js') {
-        const js = `const style = "color: red; font-size: 60px; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);";function warn() {console.log("%c请不要在这里复制粘贴任何代码，如果有人想要让你复制粘贴，那么他是骗子",style);}warn();setInterval(warn, 10000);
+        const js = `const style = "color: red; font-size: 60px; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.3);";
+function warn() {
+    console.log("%c请不要在这里复制粘贴任何代码，如果有人想要让你复制粘贴，那么他是骗子", style);
+}
+warn();
+setInterval(warn, 10000);
 
 const $ = id => document.getElementById(id);
 
@@ -1176,94 +1221,71 @@ async function loadMainApp() {
     $('mainApp').style.display = 'block';
 
     try {
-        const resp = await fetch('/admin/init');
-        const data = await resp.json();
+        // 1. 所有登录用户都请求 /user/info
+        const userResp = await fetch('/user/info');
+        const userData = await userResp.json();
 
-        if (data.account) $('loginHint').textContent = '管理员账号：' + data.account;
-        if (data.domain) $('adminSenderDomain').textContent = data.domain;
+        if (!userData.success) {
+            $('mainApp').style.display = 'none';
+            $('loginPage').style.display = 'flex';
+            return;
+        }
 
-        // 直接从 init 获取 Resend 状态
-        resendConfigured = data.resendConfigured || false;
+        if (userData.account) $('loginHint').textContent = '管理员账号：' + userData.account;
+        if (userData.domain) $('adminSenderDomain').textContent = userData.domain;
+
+        // 设置浏览器标签页标题
+        if (userData.title) {
+            document.title = userData.title;
+            $('headerTitle').textContent = userData.title;
+        }
+
+        resendConfigured = userData.resendConfigured || false;
         updateSendButtonVisibility();
 
-        if (data.isLoggedIn && data.user) {
-            if (data.user.role === 'admin') {
+        // 2. 设置用户信息
+        if (userData.user) {
+            if (userData.user.role === 'admin') {
                 $('userBadge').textContent = '👤 管理员';
                 $('adminPanel').style.display = 'block';
             } else {
-                $('userBadge').textContent = '👤 ' + data.user.email;
-            }
-
-            if (data.settings) {
-                $('adminTitle').value = data.settings.title || '';
-                $('adminSenderPrefix').value = data.settings.senderPrefix || 'noreply';
-                $('adminRegCode').value = data.settings.regCode || '暂无注册码';
-                if (data.settings.autoReply !== undefined) {
-                    document.querySelector('input[name="autoReply"][value="' + (data.settings.autoReply ? 'on' : 'off') + '"]').checked = true;
-                }
-                $('headerTitle').textContent = data.settings.title || '📧 邮件管理';
-                document.title = data.settings.title || '📧 邮件管理';
+                $('userBadge').textContent = '👤 ' + userData.user.email;
             }
         }
 
-        // 只加载邮件列表，不再需要 checkResend
+        // 3. 如果是管理员，再请求 /admin/info 获取设置
+        if (userData.user && userData.user.role === 'admin') {
+            try {
+                const adminResp = await fetch('/admin/info');
+                if (adminResp.ok) {
+                    const adminData = await adminResp.json();
+                    if (adminData.settings) {
+                        $('adminTitle').value = adminData.settings.title || '';
+                        $('adminSenderPrefix').value = adminData.settings.senderPrefix || 'noreply';
+                        $('adminRegCode').value = adminData.settings.regCode || '暂无注册码';
+                        if (adminData.settings.autoReply !== undefined) {
+                            document.querySelector('input[name="autoReply"][value="' + (adminData.settings.autoReply ? 'on' : 'off') + '"]').checked = true;
+                        }
+                        if (adminData.settings.title) {
+                            document.title = adminData.settings.title;
+                            $('headerTitle').textContent = adminData.settings.title;
+                        }
+                    }
+                }
+            } catch { /* ignore */ }
+        }
+
+        // 4. 加载邮件列表
         await loadMails();
         if (refreshInterval) clearInterval(refreshInterval);
         refreshInterval = setInterval(loadMails, 30000);
     } catch (e) {
         console.error('加载失败，使用降级方案:', e);
-        await loadUserInfo();
-        await loadAdminSettings();
         await loadMails();
-        await checkResend();
         if (refreshInterval) clearInterval(refreshInterval);
         refreshInterval = setInterval(loadMails, 30000);
     }
 }
-
-// ============================================================
-// 加载用户信息（不显示具体管理员账号名）
-// ============================================================
-async function loadUserInfo() {
-    try {
-        const resp = await fetch('/user/info');
-        const data = await resp.json();
-        if (data.success) {
-            if (data.role === 'admin') {
-                $('userBadge').textContent = '👤 管理员';
-                $('adminPanel').style.display = 'block';
-            } else {
-                $('userBadge').textContent = '👤 ' + data.email;
-            }
-        }
-    } catch { /* ignore */ }
-}
-
-// ============================================================
-// 加载管理员设置（包含域名）
-// ============================================================
-async function loadAdminSettings() {
-    try {
-        const domainResp = await fetch('/admin/domain');
-        const domainData = await domainResp.json();
-        const domain = domainData.domain || 'example.com';
-        $('adminSenderDomain').textContent = domain;
-
-        const resp = await fetch('/admin/settings');
-        const data = await resp.json();
-        if (data.success) {
-            $('adminTitle').value = data.title || '';
-            $('adminSenderPrefix').value = data.senderPrefix || 'noreply';
-            $('adminRegCode').value = data.regCode || '暂无注册码';
-            if (data.autoReply !== undefined) {
-                document.querySelector('input[name="autoReply"][value="' + (data.autoReply ? 'on' : 'off') + '"]').checked = true;
-            }
-            $('headerTitle').textContent = data.title || '📧 邮件管理';
-            document.title = data.title || '📧 邮件管理';
-        }
-    } catch { /* ignore */ }
-}
-
 // ============================================================
 // 保存管理员设置
 // ============================================================
@@ -1286,7 +1308,23 @@ async function saveAdminSettings() {
         if (!data.success) { showToast('保存失败: ' + data.error, true); return; }
         showToast('✅ 设置已保存');
         $('adminNewPassword').value = '';
-        await loadAdminSettings();
+        // 重新加载设置
+        const adminResp = await fetch('/admin/info');
+        if (adminResp.ok) {
+            const adminData = await adminResp.json();
+            if (adminData.settings) {
+                $('adminTitle').value = adminData.settings.title || '';
+                $('adminSenderPrefix').value = adminData.settings.senderPrefix || 'noreply';
+                $('adminRegCode').value = adminData.settings.regCode || '暂无注册码';
+                if (adminData.settings.autoReply !== undefined) {
+                    document.querySelector('input[name="autoReply"][value="' + (adminData.settings.autoReply ? 'on' : 'off') + '"]').checked = true;
+                }
+                if (adminData.settings.title) {
+                    document.title = adminData.settings.title;
+                    $('headerTitle').textContent = adminData.settings.title;
+                }
+            }
+        }
     } catch (e) { showToast('网络错误', true); }
 }
 
@@ -1327,18 +1365,6 @@ function copyRegCode() {
 // ============================================================
 let resendConfigured = false;
 let refreshInterval = null;
-
-async function checkResend() {
-    try {
-        const resp = await fetch('/check-resend');
-        const data = await resp.json();
-        resendConfigured = data.configured;
-        updateSendButtonVisibility();
-    } catch {
-        resendConfigured = false;
-        updateSendButtonVisibility();
-    }
-}
 
 function updateSendButtonVisibility() {
     const btn = $('composeSendBtn');
@@ -1436,16 +1462,19 @@ async function viewMail(id) {
         // 显示附件
         const attachments = mail.attachments || [];
         const attachmentContainer = $('viewAttachments');
-        const attachmentList = $('viewAttachmentList');  // ← 改这里
+        const attachmentList = $('viewAttachmentList');
         if (attachments.length > 0) {
             attachmentContainer.style.display = 'block';
-            attachmentList.innerHTML = attachments.map(function(att) {
-                return '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #eee;">' +
-                    '<span style="font-size:13px;">📎 ' + escapeHtml(att.filename) + '</span>' +
-                    '<span style="font-size:11px;color:#999;">(' + (att.size / 1024).toFixed(1) + ' KB)</span>' +
-                    '<a href="/attachments/' + encodeURIComponent(att.key) + '" target="_blank" style="font-size:12px;color:#667eea;margin-left:auto;">下载</a>' +
-                '</div>';
-            }).join('');
+            var attHtml = '';
+            for (var i = 0; i < attachments.length; i++) {
+                var att = attachments[i];
+                attHtml += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #eee;">';
+                attHtml += '  <span style="font-size:13px;">📎 ' + escapeHtml(att.filename) + '</span>';
+                attHtml += '  <span style="font-size:11px;color:#999;">(' + (att.size / 1024).toFixed(1) + ' KB)</span>';
+                attHtml += '  <a href="/attachments/' + encodeURIComponent(att.key) + '" target="_blank" style="font-size:12px;color:#667eea;margin-left:auto;">下载</a>';
+                attHtml += '</div>';
+            }
+            attachmentList.innerHTML = attHtml;
         } else {
             attachmentContainer.style.display = 'none';
         }
@@ -1471,18 +1500,16 @@ function closeView() {
 
 function replyFromView() {
     if (!currentViewId) return;
-    checkResend().then(() => {
-        if (!resendConfigured) { showToast('⚠️ 请先配置 Resend API Key', true); return; }
-        const mail = mails.find(m => m.id === currentViewId);
-        if (!mail) return;
-        closeView();
-        $('composeTo').value = mail.from;
-        $('composeSubject').value = 'Re: ' + (mail.subject || '');
-        const replyContent = '<br><br>--- 原始邮件 ---<br>' + (mail.text || '').replace(/\\n/g, '<br>');
-        $('composeHtml').value = replyContent;
-        $('composePreview').innerHTML = replyContent;
-        $('composeModal').classList.add('active');
-    });
+    if (!resendConfigured) { showToast('⚠️ 请先配置 Resend API Key', true); return; }
+    const mail = mails.find(m => m.id === currentViewId);
+    if (!mail) return;
+    closeView();
+    $('composeTo').value = mail.from;
+    $('composeSubject').value = 'Re: ' + (mail.subject || '');
+    const replyContent = '<br><br>--- 原始邮件 ---<br>' + (mail.text || '').split(String.fromCharCode(10)).join('<br>');
+    $('composeHtml').value = replyContent;
+    $('composePreview').innerHTML = replyContent;
+    $('composeModal').classList.add('active');
 }
 
 async function deleteFromView() {
@@ -1501,7 +1528,6 @@ async function deleteFromView() {
 // 写邮件
 // ============================================================
 function openCompose() {
-    checkResend();
     $('composeTo').value = '';
     $('composeSubject').value = '';
     $('composeHtml').value = '';
@@ -1593,12 +1619,7 @@ async function sendCompose() {
         const resp = await fetch('/send', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                to,
-                subject,
-                html,
-                attachments: attachments
-            })
+            body: JSON.stringify({ to, subject, html, attachments: attachments })
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || '发送失败');
@@ -1617,19 +1638,40 @@ async function sendCompose() {
 // ============================================================
 async function init() {
     const sessionId = document.cookie.match(/session=([^;]+)/)?.[1];
-    if (sessionId) {
+
+    if (!sessionId) {
+        // 未登录：请求 /no-login/info 获取标题
         try {
-            const resp = await fetch('/user/info');
-            if (resp.ok) { loadMainApp(); return; }
+            const resp = await fetch('/no-login/info');
+            const data = await resp.json();
+            if (data.title) document.title = data.title;
+            if (data.account) $('loginHint').textContent = '管理员账号：' + data.account;
         } catch { /* ignore */ }
+
+        $('loginPage').style.display = 'flex';
+        $('registerPage').style.display = 'none';
+        return;
     }
-    $('loginPage').style.display = 'flex';
-    $('registerPage').style.display = 'none';
+
+    // 已登录：验证 session
     try {
-        const resp = await fetch('/admin/account');
+        const resp = await fetch('/user/info');
+        if (resp.ok) {
+            loadMainApp();
+            return;
+        }
+    } catch { /* ignore */ }
+
+    // session 无效
+    try {
+        const resp = await fetch('/no-login/info');
         const data = await resp.json();
+        if (data.title) document.title = data.title;
         if (data.account) $('loginHint').textContent = '管理员账号：' + data.account;
     } catch { /* ignore */ }
+
+    $('loginPage').style.display = 'flex';
+    $('registerPage').style.display = 'none';
 }
 
 document.addEventListener('DOMContentLoaded', init);
