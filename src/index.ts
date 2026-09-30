@@ -1411,7 +1411,7 @@ function renderMails() {
         var subject = escapeHtml(m.subject || '(无主题)');
         var time = formatTime(m.timestamp);
         var badge = m.status === 'replied' ? 'replied' : '';
-        var badgeText = m.status === 'replied' ? '✅ 已回复' : '📩 未读';
+        var badgeText = m.status === 'replied' ? '✅ 已回复' : '📩 未回复';
         html += '<div class="mail-item" data-id="' + m.id + '" onclick="viewMail(this.dataset.id)">';
         html += '  <div class="avatar">' + from[0].toUpperCase() + '</div>';
         html += '  <div class="info">';
@@ -1680,6 +1680,32 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') {
         if ($('loginPage').style.display !== 'none') login();
         else if ($('registerPage').style.display !== 'none') register();
+    }
+});
+
+// ============================================================
+// 写邮件：源码与预览双向同步
+// ============================================================
+document.addEventListener('DOMContentLoaded', function() {
+    const textarea = document.getElementById('composeHtml');
+    const preview = document.getElementById('composePreview');
+
+    if (textarea) {
+        textarea.addEventListener('input', function() {
+            const html = textarea.value;
+            const placeholder = '<span class="empty-hint">👈 左边写源码，或直接在右边编辑文字</span>';
+            preview.innerHTML = html.trim() ? html : placeholder;
+        });
+    }
+
+    if (preview) {
+        preview.addEventListener('input', function() {
+            const html = preview.innerHTML;
+            const placeholder = '<span class="empty-hint">👈 左边写源码，或直接在右边编辑文字</span>';
+            if (html.trim() && html !== placeholder) {
+                textarea.value = html;
+            }
+        });
     }
 });`;
             return new Response(js, {
