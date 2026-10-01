@@ -88,6 +88,14 @@
                     </div>
                 </div>
                 <div class="field">
+                    <label>推送通知</label>
+                    <div style="display:flex;gap:8px;margin-top:4px;">
+                        <button onclick="subscribePush()" style="padding:8px 16px;background:#27ae60;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;">开启推送</button>
+                        <button onclick="unsubscribePush()" style="padding:8px 16px;background:#e74c3c;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;">关闭推送</button>
+                    </div>
+                    <div class="field-hint">开启后收到新邮件会推送通知</div>
+                </div>
+                <div class="field">
                     <label>修改管理员密码</label>
                     <input id="adminNewPassword" type="password" placeholder="留空不修改" />
                 </div>
