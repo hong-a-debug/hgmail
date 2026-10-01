@@ -22,6 +22,8 @@
 
 ## 🚀 快速开始
 
+[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/hong-a-debug/hgmail)
+
 ### 一键部署
 
 1. 双击项目文件夹里的 `部署.bat`
