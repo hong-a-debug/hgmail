@@ -545,6 +545,42 @@ export default {
         }
 
         // ============================================================
+        // PWA manifest
+        // ============================================================
+        if (path === '/manifest.json') {
+            const manifest = {
+                name: '红怪邮件',
+                short_name: '邮件',
+                description: '轻量级邮件收发系统',
+                start_url: '/',
+                display: 'standalone',
+                background_color: '#667eea',
+                theme_color: '#667eea',
+                protocol_handlers: [
+                    {
+                        protocol: 'mailto',
+                        url: '/new-email?to=%s'
+                    }
+                ]
+            };
+            return new Response(JSON.stringify(manifest), {
+                headers: {
+                    'Content-Type': 'application/manifest+json; charset=utf-8',
+                    'Cache-Control': 'public, max-age=86400'
+                },
+            });
+        }
+
+        // ============================================================
+        // mailto 链接跳转
+        // ============================================================
+        if (path === '/new-email') {
+            return new Response(HTML_TEMPLATE, {
+                headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            });
+        }
+
+        // ============================================================
         // 首页
         // ============================================================
         if (path === '/' || path === '') {
@@ -1667,38 +1703,43 @@ async function sendCompose() {
 // ============================================================
 async function init() {
     const sessionId = document.cookie.match(/session=([^;]+)/)?.[1];
+    const urlParams = new URLSearchParams(window.location.search);
+    const mailtoTo = urlParams.get('to');
 
     if (!sessionId) {
-        // 未登录：请求 /no-login/info 获取标题
+        if (mailtoTo) sessionStorage.setItem('pendingMailto', mailtoTo);
         try {
             const resp = await fetch('/no-login/info');
             const data = await resp.json();
             if (data.title) document.title = data.title;
             if (data.account) $('loginHint').textContent = '管理员账号：' + data.account;
         } catch { /* ignore */ }
-
         $('loginPage').style.display = 'flex';
         $('registerPage').style.display = 'none';
         return;
     }
 
-    // 已登录：验证 session
     try {
         const resp = await fetch('/user/info');
         if (resp.ok) {
-            loadMainApp();
+            await loadMainApp();
+            if (mailtoTo) openComposeWithTo(mailtoTo);
+            else {
+                const pending = sessionStorage.getItem('pendingMailto');
+                if (pending) {
+                    sessionStorage.removeItem('pendingMailto');
+                    openComposeWithTo(pending);
+                }
+            }
             return;
         }
     } catch { /* ignore */ }
 
-    // session 无效
     try {
         const resp = await fetch('/no-login/info');
         const data = await resp.json();
         if (data.title) document.title = data.title;
-        if (data.account) $('loginHint').textContent = '管理员账号：' + data.account;
     } catch { /* ignore */ }
-
     $('loginPage').style.display = 'flex';
     $('registerPage').style.display = 'none';
 }
@@ -1736,7 +1777,34 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-});`;
+});
+
+// ============================================================
+// 打开写邮件弹窗并填入收件人
+// ============================================================
+function openComposeWithTo(to) {
+    if ($('mainApp').style.display === 'none') {
+        setTimeout(() => openComposeWithTo(to), 500);
+        return;
+    }
+    openCompose();
+    let email = to.replace(/^mailto:/i, '');
+    let subject = '';
+    let body = '';
+    const parts = email.split('?');
+    email = decodeURIComponent(parts[0] || '');
+    if (parts[1]) {
+        const params = new URLSearchParams(parts[1]);
+        subject = params.get('subject') || '';
+        body = params.get('body') || '';
+    }
+    if (email) $('composeTo').value = email;
+    if (subject) $('composeSubject').value = subject;
+    if (body) {
+        $('composeHtml').value = body;
+        $('composePreview').innerHTML = body;
+    }
+}`;
             return new Response(js, {
                 headers: {
                     'Content-Type': 'application/javascript; charset=utf-8',
