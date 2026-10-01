@@ -23,7 +23,7 @@
 ## 🚀 快速开始
 ### 此按钮可以代替以下两种
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/hong-a-debug/hgmail)
-部署完成后跳过(https://github.com/hong-a-debug/hgmail/blob/main/README.md#%E6%9D%83%E9%99%90%E8%A2%AB%E9%98%BB%E6%AD%A2%E6%80%8E%E4%B9%88%E5%8A%9E)
+[部署完成后跳过](https://github.com/hong-a-debug/hgmail/blob/main/README.md#%E6%9D%83%E9%99%90%E8%A2%AB%E9%98%BB%E6%AD%A2%E6%80%8E%E4%B9%88%E5%8A%9E)
 
 ### 打开文件部署
 
