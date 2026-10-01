@@ -9,7 +9,7 @@ export interface StoredEmail {
     text: string;
     html?: string;
     attachments?: AttachmentInfo[];
-    status: 'received' | 'replied' | 'forwarded';
+    status: 'received' | 'replied' | 'forwarded' | 'read';
 }
 
 export interface AttachmentInfo {
@@ -40,4 +40,6 @@ export interface Env {
     RESEND_API_KEY: string;
     DOMAIN: string;
     ADMIN_ACCOUNT: string;
+    VAPID_PUBLIC_KEY: string;
+    VAPID_PRIVATE_KEY: string;
 }
