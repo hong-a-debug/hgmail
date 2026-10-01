@@ -30,9 +30,33 @@ import template from './template.html';
 const HTML_TEMPLATE = template;
 
 // ============================================================
+// 发送 Web Push 通知
+// ============================================================
+async function sendPushNotification(
+    env: Env,
+    subscription: any,
+    title: string,
+    from: string
+): Promise<void> {
+    const webpush = await import('web-push');
+    webpush.default.setVapidDetails(
+        `mailto:admin@${env.DOMAIN}`,
+        env.VAPID_PUBLIC_KEY,
+        env.VAPID_PRIVATE_KEY
+    );
+    const payload = JSON.stringify({
+        title: '📧 新邮件',
+        body: `${from}: ${title}`,
+        url: '/'
+    });
+    await webpush.default.sendNotification(subscription, payload, {
+        TTL: 60 * 60
+    });
+}
+
+// ============================================================
 // Worker 主入口
 // ============================================================
-
 export default {
     async email(message: any, env: Env, ctx: ExecutionContext) {
         console.log(`📨 收到邮件: from=${message.from}, to=${message.to}`);
@@ -68,6 +92,7 @@ export default {
 
             await env.EMAIL.put(messageId, JSON.stringify(emailData), { expirationTtl: 30 * 24 * 60 * 60 });
 
+            // 全局邮件索引
             const idsJson = await env.EMAIL.get('_mail_ids');
             let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
             ids.push(messageId);
@@ -78,6 +103,7 @@ export default {
             }
             await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
 
+            // 用户邮件列表
             const recipients = parsed.to.split(',').map(r => r.trim());
             for (const recipient of recipients) {
                 const userListKey = `user:${recipient}:list`;
@@ -88,6 +114,29 @@ export default {
                 await env.EMAIL_USER.put(userListKey, JSON.stringify(userIds));
             }
 
+            // 推送通知
+            const pushRecipients = parsed.to.split(',').map(r => r.trim());
+            for (const recipient of pushRecipients) {
+                const subJson = await env.EMAIL_USER.get(`push:${recipient}`);
+                if (subJson) {
+                    try {
+                        const subscription = JSON.parse(subJson);
+                        await sendPushNotification(
+                            env,
+                            subscription,
+                            parsed.subject || '(无主题)',
+                            parsed.from
+                        );
+                    } catch (e) {
+                        console.error('推送失败:', e);
+                        if (String(e).includes('410') || String(e).includes('404')) {
+                            await env.EMAIL_USER.delete(`push:${recipient}`);
+                        }
+                    }
+                }
+            }
+
+            // 自动回复
             const autoReplyEnabled = await env.EMAIL_USER.get('admin:auto_reply') !== 'false';
             if (env.RESEND_API_KEY && autoReplyEnabled) {
                 const prefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
@@ -202,7 +251,6 @@ export default {
             const adminExists = await env.EMAIL_USER.get('_admin_exists');
             return Response.json({ hasAdmin: adminExists === 'true' });
         }
-
 
         // ============================================================
         // 获取管理员账号
@@ -330,7 +378,7 @@ export default {
             return Response.json({ configured: !!env.RESEND_API_KEY });
         }
 
-        // ============================================================
+                // ============================================================
         // 下载附件（通过邮件 ID）
         // ============================================================
         if (path.startsWith('/download/') && request.method === 'GET') {
@@ -577,6 +625,83 @@ export default {
         if (path === '/new-email') {
             return new Response(HTML_TEMPLATE, {
                 headers: { 'Content-Type': 'text/html; charset=utf-8' },
+            });
+        }
+
+        // ============================================================
+        // 获取 VAPID 公钥
+        // ============================================================
+        if (path === '/push/vapid-public-key') {
+            return Response.json({ publicKey: env.VAPID_PUBLIC_KEY });
+        }
+
+        // ============================================================
+        // 保存推送订阅
+        // ============================================================
+        if (path === '/push/subscribe' && request.method === 'POST') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ error: '未登录' }, { status: 401 });
+
+            const subscription = await request.json();
+            await env.EMAIL_USER.put(
+                `push:${session.email}`,
+                JSON.stringify(subscription)
+            );
+            return Response.json({ success: true });
+        }
+
+        // ============================================================
+        // 取消推送订阅
+        // ============================================================
+        if (path === '/push/unsubscribe' && request.method === 'POST') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ error: '未登录' }, { status: 401 });
+
+            await env.EMAIL_USER.delete(`push:${session.email}`);
+            return Response.json({ success: true });
+        }
+
+        // ============================================================
+        // Service Worker
+        // ============================================================
+        if (path === '/sw.js') {
+            const sw = `self.addEventListener('push', function(event) {
+    let data = { title: '📧 新邮件', body: '你收到了一封新邮件', url: '/' };
+    if (event.data) {
+        try { data = event.data.json(); } catch (e) { data.body = event.data.text(); }
+    }
+    event.waitUntil(
+        self.registration.showNotification(data.title, {
+            body: data.body,
+            icon: 'https://hg-chat.win/favicon.ico',
+            data: { url: data.url || '/' },
+            tag: 'mail-notification',
+            renotify: true
+        })
+    );
+});
+
+self.addEventListener('notificationclick', function(event) {
+    event.notification.close();
+    const url = event.notification.data?.url || '/';
+    event.waitUntil(
+        clients.matchAll({ type: 'window', includeUncontrolled: true })
+            .then(function(clientList) {
+                for (const client of clientList) {
+                    if (client.url.includes(self.location.origin) && 'focus' in client) {
+                        client.navigate(url);
+                        return client.focus();
+                    }
+                }
+                if (clients.openWindow) return clients.openWindow(url);
+            })
+    );
+});`;
+            return new Response(sw, {
+                headers: {
+                    'Content-Type': 'application/javascript; charset=utf-8',
+                    'Cache-Control': 'no-cache'
+                }
             });
         }
 
@@ -1257,7 +1382,6 @@ async function loadMainApp() {
     $('mainApp').style.display = 'block';
 
     try {
-        // 1. 所有登录用户都请求 /user/info
         const userResp = await fetch('/user/info');
         const userData = await userResp.json();
 
@@ -1270,7 +1394,6 @@ async function loadMainApp() {
         if (userData.account) $('loginHint').textContent = '管理员账号：' + userData.account;
         if (userData.domain) $('adminSenderDomain').textContent = userData.domain;
 
-        // 设置浏览器标签页标题
         if (userData.title) {
             document.title = userData.title;
             $('headerTitle').textContent = userData.title;
@@ -1279,7 +1402,6 @@ async function loadMainApp() {
         resendConfigured = userData.resendConfigured || false;
         updateSendButtonVisibility();
 
-        // 2. 设置用户信息
         if (userData.user) {
             if (userData.user.role === 'admin') {
                 $('userBadge').textContent = '👤 管理员';
@@ -1289,7 +1411,6 @@ async function loadMainApp() {
             }
         }
 
-        // 3. 如果是管理员，再请求 /admin/info 获取设置
         if (userData.user && userData.user.role === 'admin') {
             try {
                 const adminResp = await fetch('/admin/info');
@@ -1311,7 +1432,6 @@ async function loadMainApp() {
             } catch { /* ignore */ }
         }
 
-        // 4. 加载邮件列表
         await loadMails();
         if (refreshInterval) clearInterval(refreshInterval);
         refreshInterval = setInterval(loadMails, 30000);
@@ -1322,6 +1442,7 @@ async function loadMainApp() {
         refreshInterval = setInterval(loadMails, 30000);
     }
 }
+
 // ============================================================
 // 保存管理员设置
 // ============================================================
@@ -1344,7 +1465,6 @@ async function saveAdminSettings() {
         if (!data.success) { showToast('保存失败: ' + data.error, true); return; }
         showToast('✅ 设置已保存');
         $('adminNewPassword').value = '';
-        // 重新加载设置
         const adminResp = await fetch('/admin/info');
         if (adminResp.ok) {
             const adminData = await adminResp.json();
@@ -1397,7 +1517,7 @@ function copyRegCode() {
 }
 
 // ============================================================
-// 检查 Resend
+// Resend 状态
 // ============================================================
 let resendConfigured = false;
 let refreshInterval = null;
@@ -1494,9 +1614,7 @@ async function viewMail(id) {
         $('viewFrom').textContent = mail.from || '未知';
         $('viewTime').textContent = formatTime(mail.timestamp);
 
-        // ============================================================
-        // 用 iframe 隔离渲染邮件内容（不受主页面 CSS 影响）
-        // ============================================================
+        // 用 iframe 隔离渲染邮件内容
         const mailHtml = mail.html || mail.text || '(无内容)';
         const iframeDoc = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>' +
             'body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 14px; line-height: 1.7; color: #1a1a2e; padding: 16px; margin: 0; word-wrap: break-word; }' +
@@ -1517,9 +1635,7 @@ async function viewMail(id) {
             }
         };
 
-        // ============================================================
         // 显示附件
-        // ============================================================
         const attachments = mail.attachments || [];
         const attachmentContainer = $('viewAttachments');
         const attachmentList = $('viewAttachmentList');
@@ -1539,9 +1655,7 @@ async function viewMail(id) {
             attachmentContainer.style.display = 'none';
         }
 
-        // ============================================================
         // 显示邮件 ID
-        // ============================================================
         const modal = document.querySelector('#viewModal .modal');
         let idDisplay = document.getElementById('mailIdDisplay');
         if (!idDisplay) {
@@ -1699,6 +1813,94 @@ async function sendCompose() {
 }
 
 // ============================================================
+// Web Push 订阅
+// ============================================================
+function urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - base64String.length % 4) % 4);
+    const base64 = (base64String + padding)
+        .replace(/-/g, '+')
+        .replace(/_/g, '/');
+    const rawData = atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+        outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+}
+
+async function subscribePush() {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        showToast('当前浏览器不支持推送通知', true);
+        return;
+    }
+    try {
+        const registration = await navigator.serviceWorker.register('/sw.js');
+        await navigator.serviceWorker.ready;
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') {
+            showToast('你拒绝了通知权限', true);
+            return;
+        }
+        const keyResp = await fetch('/push/vapid-public-key');
+        const { publicKey } = await keyResp.json();
+        const subscription = await registration.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey)
+        });
+        await fetch('/push/subscribe', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(subscription)
+        });
+        showToast('✅ 已开启推送通知');
+    } catch (e) {
+        console.error('推送订阅失败:', e);
+        showToast('推送订阅失败: ' + e.message, true);
+    }
+}
+
+async function unsubscribePush() {
+    try {
+        const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+        if (registration) {
+            const subscription = await registration.pushManager.getSubscription();
+            if (subscription) await subscription.unsubscribe();
+        }
+        await fetch('/push/unsubscribe', { method: 'POST' });
+        showToast('已关闭推送通知');
+    } catch (e) {
+        showToast('关闭失败: ' + e.message, true);
+    }
+}
+
+// ============================================================
+// 打开写邮件弹窗并填入收件人（mailto 支持）
+// ============================================================
+function openComposeWithTo(to) {
+    if ($('mainApp').style.display === 'none') {
+        setTimeout(() => openComposeWithTo(to), 500);
+        return;
+    }
+    openCompose();
+    let email = to.replace(/^mailto:/i, '');
+    let subject = '';
+    let body = '';
+    const parts = email.split('?');
+    email = decodeURIComponent(parts[0] || '');
+    if (parts[1]) {
+        const params = new URLSearchParams(parts[1]);
+        subject = params.get('subject') || '';
+        body = params.get('body') || '';
+    }
+    if (email) $('composeTo').value = email;
+    if (subject) $('composeSubject').value = subject;
+    if (body) {
+        $('composeHtml').value = body;
+        $('composePreview').innerHTML = body;
+    }
+}
+
+// ============================================================
 // 初始化
 // ============================================================
 async function init() {
@@ -1744,19 +1946,10 @@ async function init() {
     $('registerPage').style.display = 'none';
 }
 
-document.addEventListener('DOMContentLoaded', init);
-
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Enter') {
-        if ($('loginPage').style.display !== 'none') login();
-        else if ($('registerPage').style.display !== 'none') register();
-    }
-});
-
 // ============================================================
 // 写邮件：源码与预览双向同步
 // ============================================================
-document.addEventListener('DOMContentLoaded', function() {
+function setupEditorSync() {
     const textarea = document.getElementById('composeHtml');
     const preview = document.getElementById('composePreview');
 
@@ -1777,34 +1970,22 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-});
+}
 
 // ============================================================
-// 打开写邮件弹窗并填入收件人
+// 事件绑定
 // ============================================================
-function openComposeWithTo(to) {
-    if ($('mainApp').style.display === 'none') {
-        setTimeout(() => openComposeWithTo(to), 500);
-        return;
+document.addEventListener('DOMContentLoaded', function() {
+    init();
+    setupEditorSync();
+});
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+        if ($('loginPage').style.display !== 'none') login();
+        else if ($('registerPage').style.display !== 'none') register();
     }
-    openCompose();
-    let email = to.replace(/^mailto:/i, '');
-    let subject = '';
-    let body = '';
-    const parts = email.split('?');
-    email = decodeURIComponent(parts[0] || '');
-    if (parts[1]) {
-        const params = new URLSearchParams(parts[1]);
-        subject = params.get('subject') || '';
-        body = params.get('body') || '';
-    }
-    if (email) $('composeTo').value = email;
-    if (subject) $('composeSubject').value = subject;
-    if (body) {
-        $('composeHtml').value = body;
-        $('composePreview').innerHTML = body;
-    }
-}`;
+});`;
             return new Response(js, {
                 headers: {
                     'Content-Type': 'application/javascript; charset=utf-8',
@@ -1816,3 +1997,4 @@ function openComposeWithTo(to) {
         return Response.json({ error: '未找到该路由' }, { status: 404 });
     },
 };
+
