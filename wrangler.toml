@@ -6,6 +6,7 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 DOMAIN = "example.com"
 ADMIN_ACCOUNT = "admin"
+VAPID_PUBLIC_KEY = "你的公钥"
 
 [[kv_namespaces]]
 binding = "EMAIL"
