@@ -70,6 +70,7 @@ function forwardSubject(subject) {
 function showLogin() {
     $('loginPage').style.display = 'flex';
     $('registerPage').style.display = 'none';
+    $('resetPage').style.display = 'none';
     hideError('loginError');
     hideError('regError');
 }
@@ -77,9 +78,77 @@ function showLogin() {
 function showRegister() {
     $('loginPage').style.display = 'none';
     $('registerPage').style.display = 'flex';
+    $('resetPage').style.display = 'none';
     hideError('loginError');
     hideError('regError');
     checkHasAdmin();
+}
+
+// ============================================================
+// 找回密码
+// ============================================================
+let resetToken = '';
+
+function showResetRequest() {
+    resetToken = '';
+    $('loginPage').style.display = 'none';
+    $('registerPage').style.display = 'none';
+    $('resetPage').style.display = 'flex';
+    hideError('resetError');
+    $('resetMsg').textContent = '输入注册时用的邮箱，我们会发一封带重置链接的邮件。';
+    $('resetRequestBlock').style.display = 'block';
+    $('resetConfirmBlock').style.display = 'none';
+}
+
+/** 带 ?reset=<token> 打开时直接进入设置新密码的界面 */
+function showResetConfirm(token) {
+    resetToken = token;
+    $('loginPage').style.display = 'none';
+    $('registerPage').style.display = 'none';
+    $('resetPage').style.display = 'flex';
+    hideError('resetError');
+    $('resetMsg').textContent = '请设置新密码。';
+    $('resetRequestBlock').style.display = 'none';
+    $('resetConfirmBlock').style.display = 'block';
+}
+
+async function requestReset() {
+    const email = $('resetEmail').value.trim();
+    if (!email) { showError('resetError', '请输入邮箱'); return; }
+    hideError('resetError');
+    try {
+        const resp = await fetch('/password/request', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email })
+        });
+        const data = await resp.json();
+        if (!data.success) { showError('resetError', data.error || '请求失败'); return; }
+        // 服务端对「账号存在与否」返回同样的结果，这里也不做区分
+        $('resetMsg').textContent = '如果这个邮箱已注册，重置链接已经发出，请查收（30 分钟内有效）。';
+    } catch (e) { showError('resetError', '网络错误，请重试'); }
+}
+
+async function submitReset() {
+    const password = $('resetNewPassword').value;
+    const confirm = $('resetConfirmPassword').value;
+    if (password.length < 6) { showError('resetError', '密码至少 6 位'); return; }
+    if (password !== confirm) { showError('resetError', '两次输入的新密码不一致'); return; }
+    hideError('resetError');
+    try {
+        const resp = await fetch('/password/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: resetToken, password })
+        });
+        const data = await resp.json();
+        if (!data.success) { showError('resetError', data.error || '重置失败'); return; }
+        showToast('✅ 密码已重置，请用新密码登录');
+        resetToken = '';
+        $('resetNewPassword').value = '';
+        $('resetConfirmPassword').value = '';
+        showLogin();
+    } catch (e) { showError('resetError', '网络错误，请重试'); }
 }
 
 // ============================================================
@@ -1006,6 +1075,13 @@ function openComposeWithTo(to) {
 async function init() {
     const urlParams = new URLSearchParams(window.location.search);
     const mailtoTo = urlParams.get('to');
+    const resetTokenFromUrl = urlParams.get('reset');
+
+    // 从邮件里的重置链接进来：无论有没有登录，都直接进设置新密码的界面
+    if (resetTokenFromUrl) {
+        showResetConfirm(resetTokenFromUrl);
+        return;
+    }
 
     // 会话 Cookie 是 HttpOnly 的，JS 读不到，只能靠 /user/info 判断登录状态
     try {
@@ -1097,7 +1173,12 @@ document.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') {
         const loginPage = $('loginPage');
         const registerPage = $('registerPage');
+        const resetPage = $('resetPage');
         if (loginPage && loginPage.style.display !== 'none') login();
         else if (registerPage && registerPage.style.display !== 'none') register();
+        else if (resetPage && resetPage.style.display !== 'none') {
+            if ($('resetConfirmBlock').style.display !== 'none') submitReset();
+            else requestReset();
+        }
     }
 });

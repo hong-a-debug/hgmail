@@ -745,6 +745,105 @@ const worker = {
         }
 
         // ============================================================
+        // 自助找回密码：申请重置链接
+        // ============================================================
+        if (path === '/password/request' && request.method === 'POST') {
+            try {
+                const body = await request.json() as { email?: string };
+                const email = normalizeEmail(body.email);
+                if (!isValidEmailAddress(email)) {
+                    return Response.json({ success: false, error: '邮箱格式不正确' }, { status: 400 });
+                }
+                if (!env.RESEND_API_KEY) {
+                    return Response.json(
+                        { success: false, error: '本系统未配置发信能力，无法自助找回，请联系管理员' },
+                        { status: 400 }
+                    );
+                }
+
+                // 同一邮箱 5 分钟内只发一次，避免被用来刷别人的邮箱
+                const throttleKey = `reset_req:${email}`;
+                if (await env.EMAIL_USER.get(throttleKey)) {
+                    return Response.json({ success: true });
+                }
+
+                const user = await getUser(env, email);
+                // 账号存在与否都返回同样的结果，避免被拿来枚举注册邮箱
+                if (user) {
+                    const token = (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, '');
+                    await env.EMAIL_USER.put(
+                        `reset:${token}`,
+                        JSON.stringify({ email, created_at: new Date().toISOString() }),
+                        { expirationTtl: 30 * 60 }
+                    );
+
+                    const link = `${url.origin}/?reset=${token}`;
+                    const prefix = sanitizeSenderPrefix(await env.EMAIL_USER.get('admin:sender_prefix'));
+                    await sendEmail(
+                        env.RESEND_API_KEY,
+                        `${prefix}@${env.DOMAIN}`,
+                        email,
+                        '重置你的登录密码',
+                        `<div style="font-family:sans-serif;max-width:560px;line-height:1.7;">
+                            <p>我们收到了重置这个邮箱登录密码的请求。</p>
+                            <p><a href="${link}" style="color:#667eea;">点这里设置新密码</a></p>
+                            <p style="color:#888;font-size:13px;">链接 30 分钟内有效，使用一次后立即失效。
+                            如果不是你本人操作，忽略这封邮件即可，你的密码不会被改动。</p>
+                        </div>`,
+                        `重置密码链接（30 分钟内有效）：${link}`
+                    );
+                    await env.EMAIL_USER.put(throttleKey, '1', { expirationTtl: 300 });
+                }
+
+                return Response.json({ success: true });
+            } catch (error) {
+                console.error('申请重置密码失败:', error);
+                return Response.json({ success: false, error: '请求失败，请稍后重试' }, { status: 500 });
+            }
+        }
+
+        // ============================================================
+        // 自助找回密码：用令牌设置新密码
+        // ============================================================
+        if (path === '/password/reset' && request.method === 'POST') {
+            try {
+                const body = await request.json() as { token?: string; password?: string };
+                const token = String(body.token || '').trim();
+                const password = String(body.password || '');
+                if (!token) return Response.json({ success: false, error: '链接无效' }, { status: 400 });
+                if (password.length < 6) {
+                    return Response.json({ success: false, error: '密码至少 6 位' }, { status: 400 });
+                }
+
+                const record = safeJsonParse<{ email?: string } | null>(
+                    await env.EMAIL_USER.get(`reset:${token}`), null
+                );
+                if (!record || !record.email) {
+                    return Response.json({ success: false, error: '链接无效或已过期' }, { status: 400 });
+                }
+
+                const updated = await updateUserPassword(env, record.email, await hashPassword(password));
+                if (!updated) return Response.json({ success: false, error: '账号不存在' }, { status: 400 });
+                await env.EMAIL_USER.delete(`reset:${token}`);
+
+                // 重置之后把该账号所有已登录设备踢掉
+                const listed = await env.EMAIL_USER.list({ prefix: 'session:' });
+                for (const entry of listed.keys) {
+                    const sid = entry.name.slice('session:'.length);
+                    const s = await getSession(env, sid);
+                    if (s && normalizeEmail(s.email) === normalizeEmail(record.email)) {
+                        await destroySession(env, sid);
+                    }
+                }
+
+                return Response.json({ success: true });
+            } catch (error) {
+                console.error('重置密码失败:', error);
+                return Response.json({ success: false, error: '重置失败，请稍后重试' }, { status: 500 });
+            }
+        }
+
+        // ============================================================
         // 登录
         // ============================================================
         if (path === '/login' && request.method === 'POST') {
