@@ -4,16 +4,29 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title id="pageTitle">📧 邮件管理</title>
-    <link rel="stylesheet" href="/style.css" />
-    <link rel="manifest" href="/manifest.json" />
+
+    <!-- ===== Favicon ===== -->
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <link rel="shortcut icon" href="https://hg-chat.win/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icon.png" />
+
+    <!-- ===== PWA / Web App ===== -->
+    <meta name="apple-mobile-web-app-title" content="红怪邮件" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="theme-color" content="#667eea" />
+    <link rel="manifest" href="/manifest.json" />
+
+    <!-- ===== 样式 ===== -->
+    <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
 
 <!-- ===== 登录页面 ===== -->
 <div id="loginPage" class="auth-page">
     <div class="auth-box">
-        <h2>登录</h2>
+        <h2 id="loginTitle">📧 邮件管理</h2>
         <div id="loginError" class="auth-error"></div>
         <div id="loginHint" class="auth-hint"></div>
         <input id="loginEmail" type="email" placeholder="邮箱" />
@@ -150,7 +163,7 @@
 
 <!-- ===== 查看邮件弹窗 ===== -->
 <div class="modal-overlay" id="viewModal">
-    <div class="modal">
+    <div class="modal" style="max-width:700px;">
         <div class="modal-header"><h3 id="viewSubject">邮件详情</h3><button class="modal-close" onclick="closeView()">×</button></div>
         <div style="font-size:14px;color:#666;margin-bottom:8px;"><strong>发件人：</strong><span id="viewFrom">-</span></div>
         <div style="font-size:14px;color:#666;margin-bottom:16px;"><strong>时间：</strong><span id="viewTime">-</span></div>
