@@ -381,6 +381,7 @@ const attachments = [];
 ├── tsconfig.json          # TypeScript 配置
 ├── README.md              # 项目说明
 ├── README_.md             # 部署前准备文档
+├── LICENSE                # 许可证
 └── 部署.bat               # Windows 一键部署脚本
 ```
 
