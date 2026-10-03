@@ -71,9 +71,11 @@ Cloudflare 自己就卖域名（**Cloudflare Registrar**）：**按注册局成�
 5. 填写联系人信息，以及付款方式（支持信用卡 / PayPal）
 6. 付款完成后域名会直接出现在你的账号里，**DNS 已就绪，无需额外操作**
 
-> 💡 价格参考：`.com` 约 10 美元/年，`.win` 之类的后缀更便宜，具体以结账页显示为准。Cloudflare 不加价。
+> 💡 价格参考：`.com` 约 10 美元/年，其他后缀以结账页显示为准。Cloudflare 按成本价出售、不加价。
 >
-> ⚠️ 两个限制：① Cloudflare Registrar **不是所有后缀都卖**，搜不到就只能去别处买；② 付款需要国际信用卡或 PayPal。
+> ⚠️ 三个注意点：① **不是所有后缀都卖**（官方说法是支持 400 多个后缀，搜索列表里没有就说明不支持），买不到就只能去别处买；② 不支持国际化域名（IDN，含 `xn--` 或非拉丁字符的域名）；③ 付款需要国际信用卡或 PayPal。
+>
+> 📖 后缀支持情况见 [Cloudflare 官方文档](https://developers.cloudflare.com/registrar/top-level-domains/)。
 
 ### 如果域名是在别处买的：把 DNS 托管到 Cloudflare
 
