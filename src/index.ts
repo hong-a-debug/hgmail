@@ -1505,7 +1505,15 @@ header .badge.clickable:hover { background: rgba(255,255,255,0.3); }
     outline: none;
 }
 .editor-split .right:focus { border-color: #667eea; }
-.editor-split .right .empty-hint { color: #bbb; font-size: 14px; }
+/* 预览区的提示由 CSS 生成，是纯样式而不是内容：
+   进到框里直接打字就行，不用先把提示文字删掉 */
+.editor-split .right:empty::before,
+.editor-split .right:has(> br:only-child)::before {
+    content: attr(data-placeholder);
+    color: #b6bcc8;
+    font-size: 14px;
+    pointer-events: none;
+}
 .editor-label {
     display: flex;
     justify-content: space-between;
@@ -1715,7 +1723,8 @@ header .badge.clickable:hover { background: rgba(255,255,255,0.3); }
             return new Response(css, {
                 headers: {
                     'Content-Type': 'text/css; charset=utf-8',
-                    'Cache-Control': 'public, max-age=86400'
+                    // 和 app.js 一样不缓存：样式与页面结构是一起变的
+                    'Cache-Control': 'no-cache'
                 },
             });
         }
@@ -1730,15 +1739,19 @@ setInterval(warn, 10000);
 
 const $ = id => document.getElementById(id);
 
-// 写邮件预览区的占位提示：以前在三处写了三种不一致的字符串，
-// 清空预览后占位文字有可能被当成正文发出去。
-const COMPOSE_PLACEHOLDER = '👈 左边写源码，或直接在右边编辑文字';
-const COMPOSE_PLACEHOLDER_HTML = '<span class="empty-hint">' + COMPOSE_PLACEHOLDER + '</span>';
+// 写邮件预览区的提示文字写在 template.html 的 data-placeholder 上，
+// 由 CSS 的 :empty::before 渲染成灰色提示，不是真实内容：
+// 既不会被当成正文发出去，也不用先删掉才能开始写。
 
+/** 预览区是否没有任何真实内容（空，或只剩一个 <br>） */
 function isComposePlaceholder(html) {
     if (html === null || html === undefined) return true;
-    const text = String(html).replace(/<[^>]*>/g, '').trim();
-    return text === '' || text === COMPOSE_PLACEHOLDER;
+    const text = String(html)
+        .replace(/<br\s*\/?>/gi, '')
+        .replace(/<[^>]*>/g, '')
+        .replace(/&nbsp;/g, ' ')
+        .trim();
+    return text === '';
 }
 
 function showToast(msg, isError = false) {
@@ -2323,7 +2336,7 @@ function openCompose() {
     $('composeTo').value = '';
     $('composeSubject').value = '';
     $('composeHtml').value = '';
-    $('composePreview').innerHTML = COMPOSE_PLACEHOLDER;
+    $('composePreview').innerHTML = '';
     attachments = [];
     renderAttachmentList();
     document.getElementById('composeAttachment').value = '';
@@ -2563,16 +2576,21 @@ function setupEditorSync() {
     if (textarea) {
         textarea.addEventListener('input', function() {
             const html = textarea.value;
-            preview.innerHTML = html.trim() ? html : COMPOSE_PLACEHOLDER_HTML;
+            // 清空即可，提示交给 CSS，不要把提示文字写进内容里
+            preview.innerHTML = html.trim() ? html : '';
         });
     }
 
     if (preview) {
         preview.addEventListener('input', function() {
-            const html = preview.innerHTML;
-            if (!isComposePlaceholder(html)) {
-                textarea.value = html;
+            let html = preview.innerHTML;
+            if (isComposePlaceholder(html)) {
+                // 浏览器把内容删空后常常留下一个 <br>，去掉它 :empty 才会生效
+                if (html !== '') { preview.innerHTML = ''; html = ''; }
+                textarea.value = '';
+                return;
             }
+            textarea.value = html;
         });
     }
 }

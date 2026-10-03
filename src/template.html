@@ -19,7 +19,7 @@
     <link rel="manifest" href="/manifest.json" />
 
     <!-- ===== 样式 ===== -->
-    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/style.css?v=3" />
 </head>
 <body>
 
@@ -147,7 +147,7 @@
         <div class="editor-label"><label>内容</label><span class="hint">← 源码 | 预览 → (右边可直接编辑)</span></div>
         <div class="editor-split">
             <div class="left"><textarea id="composeHtml" placeholder="写 HTML 源码..."></textarea></div>
-            <div class="right" id="composePreview" contenteditable="true"><span class="empty-hint">👈 左边写源码，或直接在右边编辑文字</span></div>
+            <div class="right" id="composePreview" contenteditable="true" data-placeholder="👈 左边写源码，或直接在右边编辑文字"></div>
         </div>
         <div style="margin-top:12px;padding-top:12px;border-top:1px solid #eee;">
             <label style="font-size:13px;font-weight:600;color:#555;display:block;margin-bottom:4px;">📎 附件</label>
@@ -205,6 +205,6 @@
 <!-- 带版本号：浏览器里可能还留着旧的 no-cache 之前的 app.js 缓存，
      换 URL 可以直接绕开，避免「旧前端 + 新后端」导致登录失败。
      以后改动 app.js 只要把这个 v= 的值加一即可。 -->
-<script src="/app.js?v=2"></script>
+<script src="/app.js?v=3"></script>
 </body>
 </html>
