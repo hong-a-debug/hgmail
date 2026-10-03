@@ -19,7 +19,7 @@
     <link rel="manifest" href="/manifest.json" />
 
     <!-- ===== 样式 ===== -->
-    <link rel="stylesheet" href="/style.css?v=8" />
+    <link rel="stylesheet" href="/style.css?v=9" />
 </head>
 <body>
 
@@ -131,6 +131,18 @@
                             <input type="radio" name="sendExternal" value="off" /> 仅本域
                         </label>
                         <span style="font-size:12px;color:#999;">选「仅本域」后普通用户只能发给本域地址（管理员不受限）</span>
+                    </div>
+                </div>
+                <div class="field">
+                    <label>注册需邮箱确认</label>
+                    <div style="display:flex;align-items:center;gap:16px;margin-top:4px;">
+                        <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;">
+                            <input type="radio" name="requireConfirm" value="on" /> 需要
+                        </label>
+                        <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;">
+                            <input type="radio" name="requireConfirm" value="off" checked /> 不需要
+                        </label>
+                        <span style="font-size:12px;color:#999;">需要时新用户要先点邮件里的确认链接才能登录</span>
                     </div>
                 </div>
                 <div class="field">
@@ -273,6 +285,6 @@
 <!-- 带版本号：浏览器里可能还留着旧的 no-cache 之前的 app.js 缓存，
      换 URL 可以直接绕开，避免「旧前端 + 新后端」导致登录失败。
      以后改动 app.js 只要把这个 v= 的值加一即可。 -->
-<script src="/app.js?v=8"></script>
+<script src="/app.js?v=9"></script>
 </body>
 </html>

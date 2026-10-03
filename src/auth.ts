@@ -120,17 +120,33 @@ export async function createUser(
     env: Env,
     email: string,
     passwordHash: string,
-    role: 'admin' | 'user' = 'user'
+    role: 'admin' | 'user' = 'user',
+    confirmed = true
 ): Promise<User> {
     const key = normalizeEmail(email);
     const user: User = {
         email: key,
         password_hash: passwordHash,
         role,
-        created_at: new Date().toISOString()
+        created_at: new Date().toISOString(),
+        confirmed
     };
     await env.EMAIL_USER.put(`user:${key}`, JSON.stringify(user));
     return user;
+}
+
+/** 把某个用户标记为邮箱已确认 */
+export async function markUserConfirmed(env: Env, email: string): Promise<boolean> {
+    const user = await getUser(env, email);
+    if (!user) return false;
+    user.confirmed = true;
+    await env.EMAIL_USER.put(`user:${normalizeEmail(email)}`, JSON.stringify(user));
+    return true;
+}
+
+/** 邮箱是否已确认（老记录没有该字段，视为已确认） */
+export function isUserConfirmed(user: User): boolean {
+    return user.confirmed !== false;
 }
 
 export async function userExists(env: Env, email: string): Promise<boolean> {

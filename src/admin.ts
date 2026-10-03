@@ -18,7 +18,10 @@ export async function getAdminSettings(env: Env) {
     const autoReply = await env.EMAIL_USER.get('admin:auto_reply') !== 'false';
     // 默认允许站外发信，保持与旧版本一致；关掉后普通用户只能发给本域地址
     const sendExternal = await env.EMAIL_USER.get('admin:send_external') !== 'false';
-    return { title, senderPrefix, autoReply, sendExternal };
+    // 默认不要求邮箱确认：确认邮件会投递回本系统自己的 Worker，
+    // 而用户在确认前又登录不进去，对自建邮件系统来说是个鸡生蛋问题。
+    const requireConfirm = await env.EMAIL_USER.get('admin:require_confirm') === 'true';
+    return { title, senderPrefix, autoReply, sendExternal, requireConfirm };
 }
 
 export async function saveAdminSettings(
@@ -26,7 +29,8 @@ export async function saveAdminSettings(
     title?: string | null,
     senderPrefix?: string | null,
     autoReply?: boolean | null,
-    sendExternal?: boolean | null
+    sendExternal?: boolean | null,
+    requireConfirm?: boolean | null
 ) {
     if (title !== undefined && title !== null) {
         await env.EMAIL_USER.put('admin:title', String(title).slice(0, 200));
@@ -39,6 +43,9 @@ export async function saveAdminSettings(
     }
     if (sendExternal !== undefined && sendExternal !== null) {
         await env.EMAIL_USER.put('admin:send_external', sendExternal ? 'true' : 'false');
+    }
+    if (requireConfirm !== undefined && requireConfirm !== null) {
+        await env.EMAIL_USER.put('admin:require_confirm', requireConfirm ? 'true' : 'false');
     }
 }
 

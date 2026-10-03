@@ -245,7 +245,7 @@ async function register() {
             showError('regError', data.error || '注册失败');
             return;
         }
-        showToast('✅ 注册成功！请登录');
+        showToast(data.needsConfirm ? '✅ 注册成功，请到邮箱点确认链接后再登录' : '✅ 注册成功！请登录');
         showLogin();
         $('loginEmail').value = email;
         $('regPassword').value = '';
@@ -324,6 +324,9 @@ async function loadMainApp() {
                         if (adminData.settings.sendExternal !== undefined) {
                             document.querySelector('input[name="sendExternal"][value="' + (adminData.settings.sendExternal ? 'on' : 'off') + '"]').checked = true;
                         }
+                        if (adminData.settings.requireConfirm !== undefined) {
+                            document.querySelector('input[name="requireConfirm"][value="' + (adminData.settings.requireConfirm ? 'on' : 'off') + '"]').checked = true;
+                        }
                         if (adminData.settings.title) {
                             document.title = adminData.settings.title;
                             $('headerTitle').textContent = adminData.settings.title;
@@ -352,9 +355,10 @@ async function saveAdminSettings() {
     const senderPrefix = $('adminSenderPrefix').value.trim();
     const autoReply = document.querySelector('input[name="autoReply"]:checked').value === 'on';
     const sendExternal = document.querySelector('input[name="sendExternal"]:checked').value === 'on';
+    const requireConfirm = document.querySelector('input[name="requireConfirm"]:checked').value === 'on';
 
     // 改密码不在这里：走独立的「修改密码」弹窗（/user/password）
-    const payload = { title, senderPrefix, autoReply, sendExternal };
+    const payload = { title, senderPrefix, autoReply, sendExternal, requireConfirm };
 
     try {
         const resp = await fetch('/admin/settings', {
@@ -1080,6 +1084,24 @@ async function init() {
     // 从邮件里的重置链接进来：无论有没有登录，都直接进设置新密码的界面
     if (resetTokenFromUrl) {
         showResetConfirm(resetTokenFromUrl);
+        return;
+    }
+
+    // 从邮件里的确认链接进来：调接口确认邮箱，然后回到登录页
+    const confirmToken = urlParams.get('confirm');
+    if (confirmToken) {
+        try {
+            const resp = await fetch('/register/confirm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ token: confirmToken })
+            });
+            const data = await resp.json();
+            showToast(data.success ? '✅ 邮箱已确认，请登录' : ('确认失败：' + (data.error || '')), !data.success);
+        } catch (e) {
+            showToast('确认失败：网络错误', true);
+        }
+        showLogin();
         return;
     }
 

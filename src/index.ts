@@ -14,6 +14,8 @@ import {
     hashPassword,
     verifyPassword,
     updateUserPassword,
+    markUserConfirmed,
+    isUserConfirmed,
 } from './auth';
 import {
     verifyRegCode,
@@ -676,6 +678,7 @@ const worker = {
                     regCode: regCodePlain || '暂无注册码',
                     autoReply: settings.autoReply !== undefined ? settings.autoReply : true,
                     sendExternal: settings.sendExternal !== undefined ? settings.sendExternal : true,
+                    requireConfirm: settings.requireConfirm !== undefined ? settings.requireConfirm : false,
                 },
             });
         }
@@ -730,17 +733,72 @@ const worker = {
                     return Response.json({ success: false, error: '该邮箱已注册' }, { status: 400 });
                 }
 
-                await createUser(env, email, await hashPassword(password), role);
+                // 是否需要邮箱确认：管理员开启了该选项、配置了发信能力，且不是首个管理员。
+                // 首个管理员永远跳过（确认邮件会投递回本系统，而他在确认前根本登录不进去）。
+                const needsConfirm = role !== 'admin'
+                    && !!env.RESEND_API_KEY
+                    && (await env.EMAIL_USER.get('admin:require_confirm') === 'true');
+
+                await createUser(env, email, await hashPassword(password), role, !needsConfirm);
 
                 if (role === 'admin') {
                     await setAdminExists(env, true);
                     await generateRegCode(env);
                 }
 
-                return Response.json({ success: true, role });
+                if (needsConfirm && env.RESEND_API_KEY) {
+                    const token = (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, '');
+                    await env.EMAIL_USER.put(
+                        `confirm:${token}`,
+                        JSON.stringify({ email, created_at: new Date().toISOString() }),
+                        { expirationTtl: 24 * 60 * 60 }
+                    );
+                    const link = `${url.origin}/?confirm=${token}`;
+                    const prefix = sanitizeSenderPrefix(await env.EMAIL_USER.get('admin:sender_prefix'));
+                    await sendEmail(
+                        env.RESEND_API_KEY,
+                        `${prefix}@${env.DOMAIN}`,
+                        email,
+                        '确认你的邮箱',
+                        `<div style="font-family:sans-serif;max-width:560px;line-height:1.7;">
+                            <p>感谢注册。请点击下面的链接确认这个邮箱，之后才能登录。</p>
+                            <p><a href="${link}" style="color:#667eea;">点这里确认邮箱</a></p>
+                            <p style="color:#888;font-size:13px;">链接 24 小时内有效。</p>
+                        </div>`,
+                        `确认邮箱：${link}`
+                    );
+                }
+
+                return Response.json({ success: true, role, needsConfirm });
             } catch (error) {
                 console.error('注册失败:', error);
                 return Response.json({ success: false, error: '注册失败，请稍后重试' }, { status: 500 });
+            }
+        }
+
+        // ============================================================
+        // 确认注册邮箱
+        // ============================================================
+        if (path === '/register/confirm' && request.method === 'POST') {
+            try {
+                const body = await request.json() as { token?: string };
+                const token = String(body.token || '').trim();
+                if (!token) return Response.json({ success: false, error: '链接无效' }, { status: 400 });
+
+                const record = safeJsonParse<{ email?: string } | null>(
+                    await env.EMAIL_USER.get(`confirm:${token}`), null
+                );
+                if (!record || !record.email) {
+                    return Response.json({ success: false, error: '链接无效或已过期' }, { status: 400 });
+                }
+
+                const done = await markUserConfirmed(env, record.email);
+                if (!done) return Response.json({ success: false, error: '账号不存在' }, { status: 400 });
+                await env.EMAIL_USER.delete(`confirm:${token}`);
+                return Response.json({ success: true, email: normalizeEmail(record.email) });
+            } catch (error) {
+                console.error('确认邮箱失败:', error);
+                return Response.json({ success: false, error: '确认失败，请稍后重试' }, { status: 500 });
             }
         }
 
@@ -876,6 +934,13 @@ const worker = {
                     try { await updateUserPassword(env, email, await hashPassword(password)); } catch (e) { console.error('口令升级失败:', e); }
                 }
 
+                if (!isUserConfirmed(user)) {
+                    return Response.json(
+                        { success: false, error: '邮箱尚未确认，请到邮箱点击确认链接后再登录' },
+                        { status: 403 }
+                    );
+                }
+
                 try { await env.EMAIL_USER.delete(throttleKey); } catch { /* ignore */ }
 
                 const sessionId = await createSession(env, email, user.role);
@@ -974,10 +1039,10 @@ const worker = {
                 if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
                 if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
 
-                const body = await request.json() as { title?: string; senderPrefix?: string; autoReply?: boolean; sendExternal?: boolean };
+                const body = await request.json() as { title?: string; senderPrefix?: string; autoReply?: boolean; sendExternal?: boolean; requireConfirm?: boolean };
                 // 口令不再从这里改：改密码统一走 /user/password（校验当前密码后写 user:<email> 记录）。
                 // 旧代码把散列写进 admin:password_hash，而登录从不读这个 key，等于改了个寂寞。
-                await saveAdminSettings(env, body.title, body.senderPrefix, body.autoReply, body.sendExternal);
+                await saveAdminSettings(env, body.title, body.senderPrefix, body.autoReply, body.sendExternal, body.requireConfirm);
                 return Response.json({ success: true });
             } catch (error) {
                 console.error('保存设置失败:', error);

@@ -46,6 +46,12 @@ export interface User {
     password_hash: string;
     role: 'admin' | 'user';
     created_at: string;
+    /**
+     * 邮箱是否已确认。
+     * 老记录没有这个字段，一律视为已确认（不能因为新增校验就把老用户锁在门外）。
+     * 只有管理员打开「注册需邮箱确认」后新注册的用户才会是 false。
+     */
+    confirmed?: boolean;
 }
 
 export interface Session {
