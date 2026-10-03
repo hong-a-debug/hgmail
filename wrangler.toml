@@ -4,23 +4,18 @@ compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-DOMAIN = "example.com"
+DOMAIN = "hg-chat.win"
 ADMIN_ACCOUNT = "admin"
-VAPID_PUBLIC_KEY = "你的公钥"
+VAPID_PUBLIC_KEY = "BFV6eb-eEGj3kPm6j7DxKNO9Vev7Cv6ZRUtJ9OFu4ZGv-u9LVirtG05x_TsVDVVAkCqB09jnJrdkaf2DMin4wOQ"
 
 [[kv_namespaces]]
 binding = "EMAIL"
-id = "你的id"
+id = "81b0f153831548108fc5bfe552159d38"
 
 [[kv_namespaces]]
 binding = "EMAIL_USER"
-id = "你的id"
+id = "8a015fc1ca2d4f23ae3c0f3f0ddbefca"
 
 [[r2_buckets]]
 binding = "ATTACHMENTS"
 bucket_name = "attachments"
-
-[build]
-  [[build.upload.rules]]
-  type = "Text"
-  globs = ["**/*.html"]

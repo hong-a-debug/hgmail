@@ -4,12 +4,14 @@ export interface StoredEmail {
     id: string;
     from: string;
     to: string;
+    /** 该邮件的全部收件人（信封 + To/Cc，已归一化去重）。旧记录没有此字段，回退用 to 判断。 */
+    recipients?: string[];
     subject: string;
     timestamp: string;
     text: string;
     html?: string;
     attachments?: AttachmentInfo[];
-    status: 'received' | 'replied' | 'forwarded' | 'read';
+    status: 'received' | 'replied' | 'forwarded' | 'read' | 'spam';
 }
 
 export interface AttachmentInfo {
@@ -18,6 +20,8 @@ export interface AttachmentInfo {
     size: number;
     url: string;
     key: string;
+    /** 邮件里 cid: 引用用的 Content-ID（已去掉尖括号），用于把内嵌图片地址重写成本站地址 */
+    content_id?: string;
 }
 
 export interface User {

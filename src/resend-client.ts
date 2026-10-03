@@ -32,17 +32,30 @@ export async function sendEmail(
     return { id: data.id };
 }
 
+/** 生成回复主题，已带 Re: 前缀就不重复加 */
+export function replySubject(subject: string): string {
+    const s = (subject || '').trim();
+    if (!s || s === '(无主题)') return 'Re: (无主题)';
+    return /^re\s*:/i.test(s) ? s : `Re: ${s}`;
+}
+
+/**
+ * 发送自动回复。
+ * 注意第 2 个参数是**完整发件地址**（如 noreply@example.com），
+ * 以前这里收的是"域名"并在内部再拼一次 noreply@，调用方传的却已经是完整地址，
+ * 结果拼成 noreply@noreply@example.com，Resend 必然拒收。
+ */
 export async function sendAutoReply(
     apiKey: string,
-    domain: string,
+    from: string,
     to: string,
     originalSubject: string
 ): Promise<string> {
     const result = await sendEmail(
         apiKey,
-        `noreply@${domain}`,
+        from,
         to,
-        `Re: ${originalSubject}`,
+        replySubject(originalSubject),
         `
             <div style="font-family: sans-serif; max-width: 600px;">
                 <p>感谢您的来信！我们已收到您的邮件，会尽快处理。</p>

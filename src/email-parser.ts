@@ -16,6 +16,8 @@ export interface ParsedAttachment {
 export interface ParsedEmailResult {
     from: string;
     to: string;
+    /** 全部 To + Cc 收件人（小写、去重）。旧代码只取 To 的第一个地址。 */
+    recipients: string[];
     subject: string;
     text: string;
     html?: string;
@@ -282,7 +284,33 @@ function isSpam(text: string, html?: string): boolean {
 // ============================================================
 function removeScriptTagsAndContent(html: string): string {
     if (!html) return html;
-    return html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '');
+    // 用 indexOf 线性扫描替代 /<script\b[^>]*>[\s\S]*?<\/script>/gi：
+    // 后者在每个 <script 起点都要向后扫到串尾才失败，遇到大量未闭合标签会退化成 O(n²)，
+    // 而这条路径是免认证的（任何能发信的人都能触发）。
+    const lower = html.toLowerCase();
+    let out = '';
+    let pos = 0;
+    while (pos < html.length) {
+        const start = lower.indexOf('<script', pos);
+        if (start === -1) {
+            out += html.slice(pos);
+            break;
+        }
+        const nextCh = html.charAt(start + 7);
+        // <scriptfoo> 之类不是标签，跳过这 7 个字符继续找
+        if (nextCh && !/[\s/>]/.test(nextCh)) {
+            out += html.slice(pos, start + 7);
+            pos = start + 7;
+            continue;
+        }
+        out += html.slice(pos, start);
+        const close = lower.indexOf('</script', start);
+        if (close === -1) break; // 未闭合：从这里到结尾全部丢弃
+        const closeEnd = html.indexOf('>', close);
+        if (closeEnd === -1) break;
+        pos = closeEnd + 1;
+    }
+    return out;
 }
 
 function hasScriptTag(html: string): boolean {
@@ -324,6 +352,14 @@ export async function parseEmail(raw: ArrayBuffer): Promise<ParsedEmailResult> {
     const text = parsed.text || parsed.html?.replace(/<[^>]*>/g, '') || '(无内容)';
     const html = parsed.html || undefined;
 
+    // 收集全部 To + Cc 收件人：以前只保留 To 的第一个地址，
+    // 多人收件 / 抄送的人在自己的收件箱里根本看不到这封信。
+    const recipients = Array.from(new Set(
+        [...(parsed.to || []), ...(parsed.cc || [])]
+            .map(addr => (addr?.address || '').trim().toLowerCase())
+            .filter(addr => addr.includes('@'))
+    ));
+
     // 显式映射附件，过滤掉无效项
     const attachments: ParsedAttachment[] = (parsed.attachments || [])
         .map(toParsedAttachment)
@@ -343,6 +379,7 @@ export async function parseEmail(raw: ArrayBuffer): Promise<ParsedEmailResult> {
     return {
         from,
         to,
+        recipients,
         subject,
         text,
         html: cleanedHtml,

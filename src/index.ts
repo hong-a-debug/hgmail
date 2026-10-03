@@ -1,7 +1,6 @@
 import { Env, StoredEmail } from './types';
 import { parseEmail } from './email-parser';
 import { sendAutoReply, sendEmail } from './resend-client';
-import { sha256 } from './utils';
 import { saveAttachments, getAttachment, deleteAttachments } from './attachment';
 import {
     getUser,
@@ -10,24 +9,340 @@ import {
     createSession,
     getSession,
     destroySession,
-    hasAdmin,
     setAdminExists,
+    hashPassword,
+    verifyPassword,
+    updateUserPassword,
 } from './auth';
 import {
-    getAdminPasswordHash,
-    setAdminPasswordHash,
-    verifyAdminPassword,
     verifyRegCode,
     generateRegCode,
     getAdminSettings,
     saveAdminSettings,
-    getSenderPrefix,
-    setSenderPrefix,
+    sanitizeSenderPrefix,
 } from './admin';
 
 import template from './template.html';
 
 const HTML_TEMPLATE = template;
+
+// ============================================================
+// 全局常量
+// ============================================================
+// 邮件在 KV 中的保留时长（秒）。所有写入该 key 的地方都必须带上，
+// 否则 KV 的过期属性会被无 TTL 的 put 覆盖掉，邮件变成永不过期。
+const MAIL_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 天
+// 列表索引最多保留多少封
+const MAX_INDEXED_MAILS = 500;
+// 列表接口一次返回多少封（只返回摘要，正文走 /mail/:id）
+const MAIL_LIST_LIMIT = 50;
+
+// 安全响应头（所有 HTML / JS / JSON 响应统一附加）
+const SECURITY_HEADERS: Record<string, string> = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Content-Security-Policy': [
+        "default-src 'self'",
+        // 邮件正文里的远程图片（logo、签名图）保持可见；
+        // 想彻底挡掉跟踪像素的话，把 https: 去掉只留 'self' data: blob:
+        "img-src 'self' data: blob: https:",
+        "style-src 'self' 'unsafe-inline'",
+        // 注意：这里必须保留 'unsafe-inline'。
+        // 本站挂在 Cloudflare 后面，边缘会往每个 HTML 响应里注入一段内联脚本
+        // （window.__CF$cv$params = {...}，即 Bot Management / JS Detections），
+        // 而且它的内容每次请求都不同（含随机 r 值），无法用哈希或 nonce 放行。
+        // 若在 Cloudflare 后台关掉 JS Detections 与 Web Analytics，即可删掉
+        // 'unsafe-inline' 和下面两个 Cloudflare 域名，恢复严格的 script-src 'self'。
+        "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
+        "worker-src 'self'",
+        "connect-src 'self' https://cloudflareinsights.com https://static.cloudflareinsights.com",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "form-action 'none'",
+        "frame-ancestors 'none'"
+    ].join('; ')
+};
+
+/** 给任意响应附加安全响应头（不覆盖已有的同名头，并显式保留 Set-Cookie） */
+function withSecurityHeaders(res: Response): Response {
+    const headers = new Headers(res.headers);
+    const setCookie = res.headers.get('Set-Cookie');
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) {
+        if (!headers.has(k)) headers.set(k, v);
+    }
+    // Set-Cookie 在部分实现里不会被 Headers 迭代器带出，显式补回
+    if (setCookie) headers.set('Set-Cookie', setCookie);
+    return new Response(res.body, {
+        status: res.status,
+        statusText: res.statusText,
+        headers
+    });
+}
+
+/** 生成会话 Cookie（HttpOnly，前端 JS 读不到，只能由服务端下发/清除） */
+function sessionCookie(sessionId: string, maxAgeSeconds: number): string {
+    const parts = [
+        `session=${sessionId}`,
+        'Path=/',
+        'HttpOnly',
+        'Secure',
+        'SameSite=Lax',
+        `Max-Age=${maxAgeSeconds}`
+    ];
+    return parts.join('; ');
+}
+
+/** 从请求头里安全地取会话 ID（锚定到 cookie 名，避免匹配到 xsession= 之类） */
+function readSessionId(request: Request): string | null {
+    const cookie = request.headers.get('Cookie') || '';
+    const match = cookie.match(/(?:^|;\s*)session=([^;]+)/);
+    return match ? match[1] : null;
+}
+
+/** 邮箱统一归一化：去空白 + 转小写 */
+function normalizeEmail(email: string | null | undefined): string {
+    return String(email || '').trim().toLowerCase();
+}
+
+/**
+ * 邮箱格式校验。
+ * 关键是要拒绝 `:` —— KV 键是 `user:${email}` 与 `user:${email}:list`，
+ * 以前注册 `a:list` 会正好写到用户 a 的邮件列表键上，破坏别人的数据。
+ */
+function isValidEmailAddress(email: string): boolean {
+    if (!email || email.length > 254) return false;
+    return /^[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,190}\.[a-z]{2,24}$/.test(email);
+}
+
+/** 路径段解码，非法转义返回 null 而不是抛异常（否则 /mail/% 直接 500） */
+function safeDecode(value: string): string | null {
+    try {
+        return decodeURIComponent(value);
+    } catch {
+        return null;
+    }
+}
+
+// ============================================================
+// 通用工具
+// ============================================================
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+/** 解析 KV 里的 JSON，失败时回退而不是抛异常（以前一旦数据异常整个接口 500） */
+function safeJsonParse<T>(raw: string | null, fallback: T): T {
+    if (raw === null || raw === undefined || raw === '') return fallback;
+    try {
+        return JSON.parse(raw) as T;
+    } catch (e) {
+        console.error('JSON 解析失败，已回退到默认值:', raw.slice(0, 120), e);
+        return fallback;
+    }
+}
+
+/** 从 "名字 <a@b.com>" 或 "a@b.com" 里取出纯地址并归一化 */
+function extractAddress(input: unknown): string {
+    const value = normalizeEmail(typeof input === 'string' ? input : '');
+    if (!value) return '';
+    const angled = value.match(/<([^>]+)>/);
+    const addr = (angled ? angled[1] : value).trim();
+    if (!addr || !addr.includes('@') || /\s/.test(addr)) return '';
+    return addr;
+}
+
+/** 会话是否有权访问某封邮件：管理员全权，普通用户必须是收件人之一 */
+function canAccessMail(session: { email: string; role: string }, mail: StoredEmail): boolean {
+    if (session.role === 'admin') return true;
+    const email = normalizeEmail(session.email);
+    if (!email) return false;
+    if (normalizeEmail(mail.to) === email) return true;
+    if (Array.isArray(mail.recipients) && mail.recipients.some(r => normalizeEmail(r) === email)) return true;
+    return false;
+}
+
+/** 列表接口用的邮件摘要（不含正文，避免一次返回几十封完整 HTML） */
+function mailSummary(mail: StoredEmail) {
+    return {
+        id: mail.id,
+        from: mail.from,
+        to: mail.to,
+        subject: mail.subject,
+        timestamp: mail.timestamp,
+        status: mail.status,
+        attachmentCount: Array.isArray(mail.attachments) ? mail.attachments.length : 0,
+        snippet: String(mail.text || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+    };
+}
+
+/**
+ * 把 HTML 正文里的 `cid:xxx` 换成可访问的附件地址。
+ * 邮件的内嵌图片（logo、签名图）都以 cid: 引用，不重写的话详情页全是裂图。
+ * 用 ?inline=1 让下载路由以内联方式返回，否则 Content-Disposition: attachment 会让 <img> 加载不到。
+ */
+function rewriteCidUrls(html: string | undefined, attachments: { key: string; content_id?: string }[]): string | undefined {
+    if (!html || !attachments || attachments.length === 0) return html;
+    let out = html;
+    for (const att of attachments) {
+        const cid = (att.content_id || '').trim();
+        if (!cid) continue;
+        const escaped = cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const url = `/attachments/${att.key}?inline=1`;
+        out = out.replace(new RegExp(`cid:${escaped}`, 'gi'), url);
+    }
+    return out;
+}
+
+/** 允许的 Web Push 服务端点（防止把订阅 endpoint 指向任意地址做盲 SSRF） */
+const ALLOWED_PUSH_HOSTS = [
+    'fcm.googleapis.com',
+    'updates.push.services.mozilla.com',
+    'push.services.mozilla.com',
+    'notify.windows.com',
+    'push.apple.com',
+    'web.push.apple.com'
+];
+
+function isAllowedPushEndpoint(endpoint: string): boolean {
+    if (!endpoint) return false;
+    try {
+        const url = new URL(endpoint);
+        if (url.protocol !== 'https:') return false;
+        const host = url.hostname.toLowerCase();
+        return ALLOWED_PUSH_HOSTS.some(allowed => host === allowed || host.endsWith(`.${allowed}`));
+    } catch {
+        return false;
+    }
+}
+
+/** 附件下载响应：默认强制 attachment + nosniff；inline=1 时只对图片/音视频内联返回 */
+function attachmentResponse(
+    attachment: { content: ArrayBuffer; contentType: string; filename: string },
+    inline = false
+): Response {
+    let filename = attachment.filename;
+    try { filename = decodeURIComponent(filename); } catch { /* ignore */ }
+    const rawType = attachment.contentType || '';
+    const contentType = /^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/i.test(rawType)
+        ? rawType
+        : 'application/octet-stream';
+    // 只允许图片/音视频内联，text/html、image/svg+xml 等一律走 attachment 下载
+    const safeInline = inline
+        && /^(image\/(?!svg)|audio\/|video\/)/i.test(contentType);
+    return new Response(attachment.content, {
+        headers: {
+            'Content-Type': contentType,
+            'Content-Disposition': `${safeInline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(filename)}`,
+            'X-Content-Type-Options': 'nosniff',
+            'Cache-Control': 'private, max-age=3600'
+        },
+    });
+}
+
+/**
+ * 收件人集合 = SMTP 信封地址 + To/Cc 头部地址，归一化去重。
+ * 信封地址是投递的权威来源（catch-all / BCC 只有它才准），头部用于补齐多个收件人。
+ */
+function normalizeRecipients(envelopeTo: unknown, headerRecipients?: string[] | null): string[] {
+    const out = new Set<string>();
+    for (const part of String(envelopeTo || '').split(',')) {
+        const addr = extractAddress(part);
+        if (addr) out.add(addr);
+    }
+    for (const part of headerRecipients || []) {
+        const addr = extractAddress(part);
+        if (addr) out.add(addr);
+    }
+    return Array.from(out);
+}
+
+/**
+ * 把一个邮件 ID 追加进索引数组。
+ * KV 对同一个 key 有「每秒 1 次写」的限制，突发收信时会 429，
+ * 以前这个异常会被外层 catch 吞掉 —— 邮件正文已入库但索引没写，邮件在列表里永久消失。
+ */
+async function appendToIndex(
+    env: Env,
+    kv: KVNamespace,
+    key: string,
+    id: string,
+    max: number
+): Promise<void> {
+    let stale: string[] = [];
+    for (let attempt = 1; attempt <= 4; attempt++) {
+        try {
+            const raw = await kv.get(key);
+            let ids = safeJsonParse<string[]>(raw, []);
+            if (!Array.isArray(ids)) ids = [];
+            ids = ids.filter(x => typeof x === 'string' && x);
+            if (!ids.includes(id)) ids.push(id);
+            if (ids.length > max) {
+                stale = ids.slice(0, ids.length - max);
+                ids = ids.slice(-max);
+            }
+            await kv.put(key, JSON.stringify(ids));
+            break;
+        } catch (e) {
+            if (attempt === 4) {
+                console.error(`❌ 索引写入最终失败，邮件 ${id} 可能不出现在列表里: ${key}`, e);
+                return;
+            }
+            console.warn(`索引写入失败(${key})，第 ${attempt} 次重试:`, e);
+            await sleep(150 * attempt * attempt);
+        }
+    }
+
+    // 只有全局索引被淘汰时才删数据，且要连 R2 附件一起删（否则附件永远留着）
+    if (stale.length > 0 && key === '_mail_ids') {
+        for (const oldId of stale) {
+            try {
+                const data = await env.EMAIL.get(oldId);
+                if (data) await deleteAttachments(env, oldId);
+                await env.EMAIL.delete(oldId);
+            } catch (e) {
+                console.error(`清理过期邮件失败: ${oldId}`, e);
+            }
+        }
+    }
+}
+
+/** 自动回复前的回环 / backscatter 防护 */
+function shouldSkipAutoReply(
+    message: any,
+    parsed: { from: string },
+    env: Env
+): { skip: boolean; reason?: string } {
+    const headers: Headers | undefined = message?.headers;
+    const autoSubmitted = headers?.get('Auto-Submitted') || '';
+    if (autoSubmitted && autoSubmitted.toLowerCase() !== 'no') {
+        return { skip: true, reason: `Auto-Submitted: ${autoSubmitted}` };
+    }
+
+    const precedence = (headers?.get('Precedence') || '').trim().toLowerCase();
+    if (precedence === 'bulk' || precedence === 'list' || precedence === 'junk') {
+        return { skip: true, reason: `Precedence: ${precedence}` };
+    }
+
+    if (typeof message?.from === 'string' && message.from.trim() === '') {
+        return { skip: true, reason: '空发件人（很可能是退信）' };
+    }
+
+    const fromAddr = extractAddress(parsed.from);
+    if (!fromAddr) return { skip: true, reason: '发件人地址无法解析' };
+
+    const domain = normalizeEmail(env.DOMAIN);
+    const fromDomain = fromAddr.split('@')[1] || '';
+    if (domain && fromDomain === domain) {
+        return { skip: true, reason: '发件人为本域，避免两台服务器互相回环' };
+    }
+
+    const local = fromAddr.split('@')[0];
+    if (['mailer-daemon', 'postmaster', 'noreply', 'no-reply', 'donotreply', 'abuse'].includes(local)) {
+        return { skip: true, reason: `发件人是无人值守地址 ${local}` };
+    }
+
+    return { skip: false };
+}
 
 // ============================================================
 // 发送 Web Push 通知
@@ -70,7 +385,7 @@ function getIconPng(base64: string): Response {
 // ============================================================
 // Worker 主入口
 // ============================================================
-export default {
+const worker = {
     async email(message: any, env: Env, ctx: ExecutionContext) {
         console.log(`📨 收到邮件: from=${message.from}, to=${message.to}`);
 
@@ -78,10 +393,33 @@ export default {
             const raw = await new Response(message.raw).arrayBuffer();
             const parsed = await parseEmail(raw);
 
-            const messageId = Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
+            const messageId = crypto.randomUUID();
 
             if (parsed.isSpam) {
-                console.log(`🚫 垃圾邮件已拦截: from=${parsed.from}, subject=${parsed.subject}`);
+                // 这里刻意不用 message.setReject()：拒收会把退信发回给（通常是被伪造的）发件人，
+                // 等于自己制造 backscatter —— 那正是本文件里自动回复要防的东西。
+                // 改为「隔离」：正文入库（7 天后自动过期）、不打进任何人的索引、附件不落 R2。
+                const spamRecipients = normalizeRecipients(message.to, parsed.recipients);
+                const spamData: StoredEmail = {
+                    id: messageId,
+                    from: parsed.from,
+                    to: spamRecipients[0] || normalizeEmail(parsed.to) || 'unknown',
+                    recipients: [],
+                    subject: parsed.subject,
+                    timestamp: new Date().toISOString(),
+                    text: parsed.text,
+                    html: parsed.html,
+                    attachments: [],
+                    status: 'spam',
+                };
+                try {
+                    await env.EMAIL.put(`spam:${messageId}`, JSON.stringify(spamData), {
+                        expirationTtl: 7 * 24 * 60 * 60
+                    });
+                    console.log(`🚫 垃圾邮件已隔离: from=${parsed.from}, subject=${parsed.subject}`);
+                } catch (e) {
+                    console.error('隔离垃圾邮件失败:', e);
+                }
                 return;
             }
 
@@ -91,75 +429,73 @@ export default {
                 console.log(`📝 邮件含 <script> 标签，已移除标签及内容: from=${parsed.from}`);
             }
 
+            // 收件人集合：SMTP 信封地址 + To/Cc 头部，归一化后去重。
+            // 以前只取头部第一个地址，导致多人收件时其他人都看不到这封信。
+            const recipients = normalizeRecipients(message.to, parsed.recipients);
+
+            // 把正文里 cid: 引用的内嵌图片重写成本站地址，否则所有内联图片（logo、签名）都是裂图。
+            const displayHtml = rewriteCidUrls(parsed.html, attachments);
+
             const emailData: StoredEmail = {
                 id: messageId,
                 from: parsed.from,
-                to: parsed.to,
+                to: recipients[0] || normalizeEmail(parsed.to) || 'unknown',
+                recipients,
                 subject: parsed.subject,
                 timestamp: new Date().toISOString(),
                 text: parsed.text,
-                html: parsed.html,
+                html: displayHtml,
                 attachments: attachments,
                 status: 'received',
             };
 
-            await env.EMAIL.put(messageId, JSON.stringify(emailData), { expirationTtl: 30 * 24 * 60 * 60 });
+            await env.EMAIL.put(messageId, JSON.stringify(emailData), { expirationTtl: MAIL_TTL_SECONDS });
 
-            // 全局邮件索引
-            const idsJson = await env.EMAIL.get('_mail_ids');
-            let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
-            ids.push(messageId);
-            if (ids.length > 500) {
-                const toRemove = ids.slice(0, ids.length - 500);
-                for (const oldId of toRemove) { await env.EMAIL.delete(oldId); }
-                ids = ids.slice(-500);
-            }
-            await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
+            // 全局邮件索引（带退避重试 / 淘汰清理）
+            await appendToIndex(env, env.EMAIL, '_mail_ids', messageId, MAX_INDEXED_MAILS);
 
             // 用户邮件列表
-            const recipients = parsed.to.split(',').map(r => r.trim());
             for (const recipient of recipients) {
-                const userListKey = `user:${recipient}:list`;
-                const userIdsJson = await env.EMAIL_USER.get(userListKey);
-                let userIds: string[] = userIdsJson ? JSON.parse(userIdsJson) : [];
-                userIds.push(messageId);
-                if (userIds.length > 500) userIds = userIds.slice(-500);
-                await env.EMAIL_USER.put(userListKey, JSON.stringify(userIds));
+                await appendToIndex(env, env.EMAIL_USER, `user:${recipient}:list`, messageId, MAX_INDEXED_MAILS);
             }
 
             // 推送通知
-            const pushRecipients = parsed.to.split(',').map(r => r.trim());
-            for (const recipient of pushRecipients) {
+            for (const recipient of recipients) {
                 const subJson = await env.EMAIL_USER.get(`push:${recipient}`);
-                if (subJson) {
-                    try {
-                        const subscription = JSON.parse(subJson);
-                        await sendPushNotification(
-                            env,
-                            subscription,
-                            parsed.subject || '(无主题)',
-                            parsed.from
-                        );
-                    } catch (e) {
-                        console.error('推送失败:', e);
-                        if (String(e).includes('410') || String(e).includes('404')) {
-                            await env.EMAIL_USER.delete(`push:${recipient}`);
-                        }
+                if (!subJson) continue;
+                try {
+                    const subscription = JSON.parse(subJson);
+                    await sendPushNotification(
+                        env,
+                        subscription,
+                        parsed.subject || '(无主题)',
+                        parsed.from
+                    );
+                } catch (e: any) {
+                    console.error('推送失败:', e);
+                    // 以前用 String(e).includes('410') 判断，既会漏判也会误判
+                    const status = e?.statusCode ?? e?.status;
+                    if (status === 404 || status === 410) {
+                        await env.EMAIL_USER.delete(`push:${recipient}`);
+                        await env.EMAIL_USER.put(`push_failed:${recipient}`, new Date().toISOString());
                     }
                 }
             }
 
             // 自动回复
             const autoReplyEnabled = await env.EMAIL_USER.get('admin:auto_reply') !== 'false';
-            if (env.RESEND_API_KEY && autoReplyEnabled) {
-                const prefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
+            const replyGuard = shouldSkipAutoReply(message, parsed, env);
+            if (env.RESEND_API_KEY && autoReplyEnabled && !replyGuard.skip) {
+                // 用 sanitizeSenderPrefix 兜住历史遗留的脏值，避免拼出非法 From
+                const prefix = sanitizeSenderPrefix(await env.EMAIL_USER.get('admin:sender_prefix'));
                 const sender = `${prefix}@${env.DOMAIN}`;
                 await sendAutoReply(env.RESEND_API_KEY, sender, parsed.from, parsed.subject);
                 const updated = { ...emailData, status: 'replied' as const };
-                await env.EMAIL.put(messageId, JSON.stringify(updated));
+                await env.EMAIL.put(messageId, JSON.stringify(updated), { expirationTtl: MAIL_TTL_SECONDS });
                 console.log('✅ 邮件已存储并自动回复');
             } else {
-                console.log(`✅ 邮件已存储（自动回复: ${autoReplyEnabled ? '已配置 Resend' : '已关闭'}）`);
+                const why = replyGuard.reason ? `，跳过自动回复: ${replyGuard.reason}` : '';
+                console.log(`✅ 邮件已存储（自动回复: ${autoReplyEnabled ? '已配置 Resend' : '已关闭'}${why}）`);
             }
         } catch (error) {
             console.error('❌ 处理邮件失败:', error);
@@ -171,8 +507,7 @@ export default {
         const path = url.pathname;
 
         async function getSessionFromCookie() {
-            const cookie = request.headers.get('Cookie') || '';
-            const sessionId = cookie.match(/session=([^;]+)/)?.[1];
+            const sessionId = readSessionId(request);
             if (!sessionId) return null;
             return await getSession(env, sessionId);
         }
@@ -277,16 +612,23 @@ export default {
         // ============================================================
         if (path === '/register' && request.method === 'POST') {
             try {
-                const body = await request.json() as { email: string; password_hash: string; regCode: string };
-                const { email, password_hash, regCode } = body;
+                const body = await request.json() as { email?: string; password?: string; regCode?: string };
+                const email = normalizeEmail(body.email);
+                const password = String(body.password || '');
+                const regCode = String(body.regCode || '').trim();
+
+                if (!isValidEmailAddress(email)) {
+                    return Response.json({ success: false, error: '邮箱格式不正确' }, { status: 400 });
+                }
+                if (password.length < 6) {
+                    return Response.json({ success: false, error: '密码至少 6 位' }, { status: 400 });
+                }
 
                 const hasAdminUser = await env.EMAIL_USER.get('_admin_exists') === 'true';
 
                 if (hasAdminUser) {
                     if (!regCode) return Response.json({ success: false, error: '请输入注册码' }, { status: 400 });
-                    const regCodeHash = await sha256(regCode);
-                    const stored = await env.EMAIL_USER.get('admin:regcode_hash');
-                    if (stored !== regCodeHash) {
+                    if (!await verifyRegCode(env, regCode)) {
                         return Response.json({ success: false, error: '注册码错误' }, { status: 400 });
                     }
                 }
@@ -296,7 +638,7 @@ export default {
                 }
 
                 const role = hasAdminUser ? 'user' : 'admin';
-                await createUser(env, email, password_hash, role);
+                await createUser(env, email, await hashPassword(password), role);
 
                 if (!hasAdminUser) {
                     await setAdminExists(env, true);
@@ -305,7 +647,8 @@ export default {
 
                 return Response.json({ success: true, role });
             } catch (error) {
-                return Response.json({ success: false, error: String(error) }, { status: 500 });
+                console.error('注册失败:', error);
+                return Response.json({ success: false, error: '注册失败，请稍后重试' }, { status: 500 });
             }
         }
 
@@ -314,30 +657,107 @@ export default {
         // ============================================================
         if (path === '/login' && request.method === 'POST') {
             try {
-                const body = await request.json() as { email: string; password_hash: string };
-                const { email, password_hash } = body;
+                const body = await request.json() as { email?: string; password?: string };
+                const email = normalizeEmail(body.email);
+                const password = String(body.password || '');
+                const clientIp = request.headers.get('CF-Connecting-IP') || 'unknown';
 
-                const user = await getUser(env, email);
-                if (!user) return Response.json({ success: false, error: '用户不存在' }, { status: 400 });
-                if (user.password_hash !== password_hash) {
-                    return Response.json({ success: false, error: '密码错误' }, { status: 400 });
+                // 简单的失败计数限速（15 分钟窗口）
+                const throttleKey = `login_fail:${clientIp}`;
+                const failCount = parseInt((await env.EMAIL_USER.get(throttleKey)) || '0', 10);
+                if (failCount >= 10) {
+                    return Response.json({ success: false, error: '尝试过于频繁，请 15 分钟后再试' }, { status: 429 });
                 }
 
+                const user = await getUser(env, email);
+                const check = user
+                    ? await verifyPassword(password, user.password_hash)
+                    : { ok: false, needsRehash: false };
+
+                if (!user || !check.ok) {
+                    try { await env.EMAIL_USER.put(throttleKey, String(failCount + 1), { expirationTtl: 900 }); } catch { /* ignore */ }
+                    // 统一文案，避免枚举出哪些邮箱已注册
+                    return Response.json({ success: false, error: '邮箱或密码错误' }, { status: 400 });
+                }
+
+                if (check.needsRehash) {
+                    // 旧记录是无盐 sha256，登录成功后顺手升级成 PBKDF2
+                    try { await updateUserPassword(env, email, await hashPassword(password)); } catch (e) { console.error('口令升级失败:', e); }
+                }
+
+                try { await env.EMAIL_USER.delete(throttleKey); } catch { /* ignore */ }
+
                 const sessionId = await createSession(env, email, user.role);
-                return Response.json({ success: true, role: user.role, sessionId });
+                // 会话 Cookie 由服务端下发：HttpOnly，前端 JS 读不到
+                return Response.json(
+                    { success: true, role: user.role },
+                    { headers: { 'Set-Cookie': sessionCookie(sessionId, 60 * 60 * 24 * 7) } }
+                );
             } catch (error) {
-                return Response.json({ success: false, error: String(error) }, { status: 500 });
+                console.error('登录失败:', error);
+                return Response.json({ success: false, error: '登录失败，请稍后重试' }, { status: 500 });
             }
         }
 
         // ============================================================
-        // 退出
+        // 退出（销毁服务端会话 + 清除 Cookie）
         // ============================================================
         if (path === '/logout' && request.method === 'POST') {
-            const cookie = request.headers.get('Cookie') || '';
-            const sessionId = cookie.match(/session=([^;]+)/)?.[1];
+            const sessionId = readSessionId(request);
             if (sessionId) await destroySession(env, sessionId);
-            return Response.json({ success: true });
+            return Response.json({ success: true }, {
+                headers: { 'Set-Cookie': sessionCookie('', 0) }
+            });
+        }
+
+        // ============================================================
+        // 修改自己的密码（所有登录用户可用，管理员也一样）
+        // ============================================================
+        if (path === '/user/password' && request.method === 'POST') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
+
+            try {
+                const body = await request.json() as { currentPassword?: string; newPassword?: string };
+                const currentPassword = String(body.currentPassword || '');
+                const newPassword = String(body.newPassword || '');
+
+                if (newPassword.length < 6) {
+                    return Response.json({ success: false, error: '新密码至少 6 位' }, { status: 400 });
+                }
+                if (newPassword === currentPassword) {
+                    return Response.json({ success: false, error: '新密码不能与当前密码相同' }, { status: 400 });
+                }
+
+                const user = await getUser(env, session.email);
+                if (!user) return Response.json({ success: false, error: '用户不存在' }, { status: 404 });
+
+                const check = await verifyPassword(currentPassword, user.password_hash);
+                if (!check.ok) {
+                    return Response.json({ success: false, error: '当前密码不正确' }, { status: 400 });
+                }
+
+                await updateUserPassword(env, session.email, await hashPassword(newPassword));
+
+                // 改密后把该用户的其他会话一并注销，只保留当前这个
+                const currentSessionId = readSessionId(request);
+                try {
+                    const listed = await env.EMAIL_USER.list({ prefix: 'session:' });
+                    for (const entry of listed.keys) {
+                        const sid = entry.name.slice('session:'.length);
+                        if (sid === currentSessionId) continue;
+                        const other = await getSession(env, sid);
+                        if (other && other.email === session.email) await destroySession(env, sid);
+                    }
+                } catch (e) {
+                    console.error('清理其他会话失败:', e);
+                }
+
+                return Response.json({ success: true });
+            } catch (error) {
+                console.error('修改密码失败:', error);
+                return Response.json({ success: false, error: '修改失败，请稍后重试' }, { status: 500 });
+            }
         }
 
         // ============================================================
@@ -363,12 +783,14 @@ export default {
                 if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
                 if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
 
-                const body = await request.json() as { title: string; senderPrefix: string; autoReply: boolean; password_hash?: string };
+                const body = await request.json() as { title?: string; senderPrefix?: string; autoReply?: boolean };
+                // 口令不再从这里改：改密码统一走 /user/password（校验当前密码后写 user:<email> 记录）。
+                // 旧代码把散列写进 admin:password_hash，而登录从不读这个 key，等于改了个寂寞。
                 await saveAdminSettings(env, body.title, body.senderPrefix, body.autoReply);
-                if (body.password_hash) await setAdminPasswordHash(env, body.password_hash);
                 return Response.json({ success: true });
             } catch (error) {
-                return Response.json({ success: false, error: String(error) }, { status: 500 });
+                console.error('保存设置失败:', error);
+                return Response.json({ success: false, error: '保存失败，请稍后重试' }, { status: 500 });
             }
         }
 
@@ -391,11 +813,14 @@ export default {
             return Response.json({ configured: !!env.RESEND_API_KEY });
         }
 
-                // ============================================================
+        // ============================================================
         // 下载附件（通过邮件 ID）
         // ============================================================
         if (path.startsWith('/download/') && request.method === 'GET') {
-            const id = decodeURIComponent(path.replace('/download/', ''));
+            const id = safeDecode(path.replace('/download/', ''));
+            if (id === null) {
+                return Response.json({ error: '非法的邮件 ID' }, { status: 400 });
+            }
             if (!id) {
                 return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
             }
@@ -409,9 +834,10 @@ export default {
             if (!mailData) {
                 return Response.json({ error: '邮件不存在' }, { status: 404 });
             }
-            const mail = JSON.parse(mailData) as StoredEmail;
+            const mail = safeJsonParse<StoredEmail | null>(mailData, null);
+            if (!mail) return Response.json({ error: '邮件数据损坏' }, { status: 500 });
 
-            if (session.role !== 'admin' && mail.to !== session.email) {
+            if (!canAccessMail(session, mail)) {
                 return Response.json({ error: '无权下载' }, { status: 403 });
             }
 
@@ -425,22 +851,17 @@ export default {
                 return Response.json({ error: '附件文件不存在' }, { status: 404 });
             }
 
-            let filename = attachment.filename;
-            try { filename = decodeURIComponent(filename); } catch { /* ignore */ }
-
-            return new Response(attachment.content, {
-                headers: {
-                    'Content-Type': attachment.contentType,
-                    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
-                },
-            });
+            return attachmentResponse(attachment);
         }
 
         // ============================================================
         // 下载附件（通过 key）
         // ============================================================
         if (path.startsWith('/attachments/') && request.method === 'GET') {
-            const key = decodeURIComponent(path.replace('/attachments/', ''));
+            const key = safeDecode(path.replace('/attachments/', ''));
+            if (key === null) {
+                return Response.json({ error: '非法的附件 ID' }, { status: 400 });
+            }
             if (!key) {
                 return Response.json({ error: '缺少附件 ID' }, { status: 400 });
             }
@@ -450,34 +871,29 @@ export default {
                 return Response.json({ error: '未登录' }, { status: 401 });
             }
 
-            const attachment = await getAttachment(env, key);
-            if (!attachment) {
-                return Response.json({ error: '附件不存在' }, { status: 404 });
-            }
-
+            // 先确认归属再读文件，避免用「文件是否存在」当探测口
             const messageId = key.split('/')[0];
             const mailData = await env.EMAIL.get(messageId);
             if (!mailData) {
                 return Response.json({ error: '邮件不存在' }, { status: 404 });
             }
-            const mail = JSON.parse(mailData) as StoredEmail;
-            if (session.role !== 'admin' && mail.to !== session.email) {
+            const mail = safeJsonParse<StoredEmail | null>(mailData, null);
+            if (!mail) return Response.json({ error: '邮件数据损坏' }, { status: 500 });
+            if (!canAccessMail(session, mail)) {
                 return Response.json({ error: '无权下载' }, { status: 403 });
             }
 
-            let filename = attachment.filename;
-            try { filename = decodeURIComponent(filename); } catch { /* ignore */ }
+            const attachment = await getAttachment(env, key);
+            if (!attachment) {
+                return Response.json({ error: '附件不存在' }, { status: 404 });
+            }
 
-            return new Response(attachment.content, {
-                headers: {
-                    'Content-Type': attachment.contentType,
-                    'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
-                },
-            });
+            // ?inline=1 用于邮件正文里的内嵌图片
+            return attachmentResponse(attachment, url.searchParams.get('inline') === '1');
         }
 
         // ============================================================
-        // 获取邮件列表
+        // 获取邮件列表（只返回摘要，正文走 /mail/:id）
         // ============================================================
         if (path === '/mails' && request.method === 'GET') {
             const session = await getSessionFromCookie();
@@ -485,23 +901,24 @@ export default {
 
             let ids: string[] = [];
             if (session.role === 'admin') {
-                const idsJson = await env.EMAIL.get('_mail_ids');
-                ids = idsJson ? JSON.parse(idsJson) : [];
+                ids = safeJsonParse<string[]>(await env.EMAIL.get('_mail_ids'), []);
             } else {
-                const userListKey = `user:${session.email}:list`;
-                const idsJson = await env.EMAIL_USER.get(userListKey);
-                ids = idsJson ? JSON.parse(idsJson) : [];
+                const userListKey = `user:${normalizeEmail(session.email)}:list`;
+                ids = safeJsonParse<string[]>(await env.EMAIL_USER.get(userListKey), []);
             }
+            if (!Array.isArray(ids)) ids = [];
 
-            const recentIds = ids.slice(-50).reverse();
-            const mails: StoredEmail[] = [];
+            const total = ids.length;
+            const recentIds = ids.slice(-MAIL_LIST_LIMIT).reverse();
+            const mails: ReturnType<typeof mailSummary>[] = [];
             for (const id of recentIds) {
+                if (!id) continue;
                 const data = await env.EMAIL.get(id);
-                if (data) {
-                    try { mails.push(JSON.parse(data)); } catch { /* ignore */ }
-                }
+                if (!data) continue;
+                const mail = safeJsonParse<StoredEmail | null>(data, null);
+                if (mail) mails.push(mailSummary(mail));
             }
-            return Response.json({ mails });
+            return Response.json({ mails, total });
         }
 
         // ============================================================
@@ -511,40 +928,40 @@ export default {
             const session = await getSessionFromCookie();
             if (!session) return Response.json({ error: '未登录' }, { status: 401 });
 
-            const id = decodeURIComponent(path.split('/')[2]);
+            const id = safeDecode(path.split('/')[2] || '');
+            if (id === null) return Response.json({ error: '非法的邮件 ID' }, { status: 400 });
             if (!id) return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
 
             const data = await env.EMAIL.get(id);
             if (!data) return Response.json({ error: '邮件不存在' }, { status: 404 });
 
-            const mail = JSON.parse(data) as StoredEmail;
-            if (session.role !== 'admin') {
-                const userEmail = session.email;
-                if (mail.from !== userEmail && mail.to !== userEmail) {
-                    return Response.json({ error: '无权查看' }, { status: 403 });
-                }
+            const mail = safeJsonParse<StoredEmail | null>(data, null);
+            if (!mail) return Response.json({ error: '邮件数据损坏' }, { status: 500 });
+            if (!canAccessMail(session, mail)) {
+                return Response.json({ error: '无权查看' }, { status: 403 });
             }
             return Response.json(mail);
         }
 
         // ============================================================
-        // 删除邮件（同时删除附件）
+        // 删除邮件（同时删除附件，并清理所有收件人的列表）
         // ============================================================
         if (path.startsWith('/mail/') && request.method === 'DELETE') {
             const session = await getSessionFromCookie();
             if (!session) return Response.json({ error: '未登录' }, { status: 401 });
 
-            const id = decodeURIComponent(path.split('/')[2]);
+            const id = safeDecode(path.split('/')[2] || '');
+            if (id === null) return Response.json({ error: '非法的邮件 ID' }, { status: 400 });
             if (!id) return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
 
             const data = await env.EMAIL.get(id);
             if (!data) return Response.json({ error: '邮件不存在' }, { status: 404 });
 
-            const mail = JSON.parse(data) as StoredEmail;
-            if (session.role !== 'admin') {
-                if (mail.to !== session.email) {
-                    return Response.json({ error: '无权删除' }, { status: 403 });
-                }
+            const mail = safeJsonParse<StoredEmail | null>(data, null);
+            if (!mail) return Response.json({ error: '邮件数据损坏' }, { status: 500 });
+            // 普通用户只允许删除发给自己的邮件
+            if (session.role !== 'admin' && normalizeEmail(mail.to) !== normalizeEmail(session.email)) {
+                return Response.json({ error: '无权删除' }, { status: 403 });
             }
 
             await env.EMAIL.delete(id);
@@ -553,17 +970,32 @@ export default {
                 await deleteAttachments(env, id);
             }
 
-            const idsJson = await env.EMAIL.get('_mail_ids');
-            let ids: string[] = idsJson ? JSON.parse(idsJson) : [];
-            ids = ids.filter(i => i !== id);
-            await env.EMAIL.put('_mail_ids', JSON.stringify(ids));
+            const allIds = safeJsonParse<string[]>(await env.EMAIL.get('_mail_ids'), []);
+            const nextIds = Array.isArray(allIds) ? allIds.filter(i => i !== id) : [];
+            await env.EMAIL.put('_mail_ids', JSON.stringify(nextIds));
 
-            if (session.role !== 'admin') {
-                const userListKey = `user:${session.email}:list`;
-                const userIdsJson = await env.EMAIL_USER.get(userListKey);
-                let userIds: string[] = userIdsJson ? JSON.parse(userIdsJson) : [];
-                userIds = userIds.filter(i => i !== id);
-                await env.EMAIL_USER.put(userListKey, JSON.stringify(userIds));
+            // 以前只在非管理员删除时清理「当前用户」一个列表，
+            // 管理员删除或多人收件时其他用户的列表会残留死 ID。
+            const owners = new Set<string>();
+            const primary = normalizeEmail(mail.to);
+            if (primary) owners.add(primary);
+            for (const r of mail.recipients || []) {
+                const e = normalizeEmail(r);
+                if (e) owners.add(e);
+            }
+            for (const owner of owners) {
+                const userListKey = `user:${owner}:list`;
+                const raw = await env.EMAIL_USER.get(userListKey);
+                const list = safeJsonParse<string[]>(raw, []);
+                if (!Array.isArray(list)) continue;
+                const next = list.filter(i => i !== id);
+                if (next.length !== list.length) {
+                    try {
+                        await env.EMAIL_USER.put(userListKey, JSON.stringify(next));
+                    } catch (e) {
+                        console.error(`清理用户列表失败: ${userListKey}`, e);
+                    }
+                }
             }
 
             return Response.json({ success: true });
@@ -588,20 +1020,50 @@ export default {
                     text?: string;
                     attachments?: { filename: string; content: string }[];
                 };
-                const prefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
-                const sender = `${prefix}@${env.DOMAIN}`;
+
+                const toList = (Array.isArray(body.to) ? body.to : [body.to])
+                    .map(a => extractAddress(a))
+                    .filter(Boolean);
+                if (toList.length === 0) {
+                    return Response.json({ success: false, error: '收件人地址不合法' }, { status: 400 });
+                }
+                if (toList.length > 50) {
+                    return Response.json({ success: false, error: '单次收件人不能超过 50 个' }, { status: 400 });
+                }
+                const attachments = Array.isArray(body.attachments) ? body.attachments : [];
+                const attachmentBytes = attachments.reduce(
+                    (sum, a) => sum + Math.ceil(String(a?.content || '').length * 3 / 4),
+                    0
+                );
+                if (attachmentBytes > 10 * 1024 * 1024) {
+                    return Response.json({ success: false, error: '附件总大小不能超过 10MB' }, { status: 400 });
+                }
+
+                // 每个用户每天发信上限，避免账号被拿来做发信跳板
+                const quotaKey = `send_quota:${normalizeEmail(session.email)}:${new Date().toISOString().slice(0, 10)}`;
+                const used = parseInt((await env.EMAIL_USER.get(quotaKey)) || '0', 10);
+                const dailyLimit = session.role === 'admin' ? 500 : 100;
+                if (used >= dailyLimit) {
+                    return Response.json({ success: false, error: '今日发信额度已用完' }, { status: 429 });
+                }
+
+                const sender = `${sanitizeSenderPrefix(await env.EMAIL_USER.get('admin:sender_prefix'))}@${env.DOMAIN}`;
                 const result = await sendEmail(
                     env.RESEND_API_KEY,
                     sender,
-                    body.to,
-                    body.subject,
-                    body.html,
+                    toList,
+                    String(body.subject || ''),
+                    String(body.html || ''),
                     body.text,
-                    body.attachments
+                    attachments
                 );
+                try {
+                    await env.EMAIL_USER.put(quotaKey, String(used + 1), { expirationTtl: 60 * 60 * 48 });
+                } catch { /* ignore */ }
                 return Response.json({ success: true, id: result.id });
             } catch (error) {
-                return Response.json({ success: false, error: String(error) }, { status: 500 });
+                console.error('发信失败:', error);
+                return Response.json({ success: false, error: '发送失败，请稍后重试' }, { status: 500 });
             }
         }
 
@@ -647,7 +1109,10 @@ export default {
         // ============================================================
         if (path === '/new-email') {
             return new Response(HTML_TEMPLATE, {
-                headers: { 'Content-Type': 'text/html; charset=utf-8' },
+                headers: {
+                    'Content-Type': 'text/html; charset=utf-8',
+                    'Cache-Control': 'no-cache'
+                },
             });
         }
 
@@ -665,12 +1130,23 @@ export default {
             const session = await getSessionFromCookie();
             if (!session) return Response.json({ error: '未登录' }, { status: 401 });
 
-            const subscription = await request.json();
-            await env.EMAIL_USER.put(
-                `push:${session.email}`,
-                JSON.stringify(subscription)
-            );
-            return Response.json({ success: true });
+            try {
+                const subscription = await request.json() as { endpoint?: string };
+                // 只接受指向已知推送服务的 endpoint：以前原样保存，
+                // 收信时会对订阅里的任意 URL 发请求（盲 SSRF）。
+                const endpoint = String(subscription?.endpoint || '');
+                if (!isAllowedPushEndpoint(endpoint)) {
+                    return Response.json({ success: false, error: '推送订阅地址不合法' }, { status: 400 });
+                }
+                await env.EMAIL_USER.put(
+                    `push:${normalizeEmail(session.email)}`,
+                    JSON.stringify(subscription)
+                );
+                await env.EMAIL_USER.delete(`push_failed:${normalizeEmail(session.email)}`);
+                return Response.json({ success: true });
+            } catch (error) {
+                return Response.json({ success: false, error: '订阅数据不合法' }, { status: 400 });
+            }
         }
 
         // ============================================================
@@ -680,7 +1156,7 @@ export default {
             const session = await getSessionFromCookie();
             if (!session) return Response.json({ error: '未登录' }, { status: 401 });
 
-            await env.EMAIL_USER.delete(`push:${session.email}`);
+            await env.EMAIL_USER.delete(`push:${normalizeEmail(session.email)}`);
             return Response.json({ success: true });
         }
 
@@ -742,7 +1218,11 @@ self.addEventListener('notificationclick', function(event) {
         // ============================================================
         if (path === '/' || path === '') {
             return new Response(HTML_TEMPLATE, {
-                headers: { 'Content-Type': 'text/html; charset=utf-8' },
+                headers: {
+                    'Content-Type': 'text/html; charset=utf-8',
+                    // 页面本身不缓存：避免前端与接口契约不一致时出现「旧页面 + 新后端」
+                    'Cache-Control': 'no-cache'
+                },
             });
         }
 
@@ -1250,6 +1730,17 @@ setInterval(warn, 10000);
 
 const $ = id => document.getElementById(id);
 
+// 写邮件预览区的占位提示：以前在三处写了三种不一致的字符串，
+// 清空预览后占位文字有可能被当成正文发出去。
+const COMPOSE_PLACEHOLDER = '👈 左边写源码，或直接在右边编辑文字';
+const COMPOSE_PLACEHOLDER_HTML = '<span class="empty-hint">' + COMPOSE_PLACEHOLDER + '</span>';
+
+function isComposePlaceholder(html) {
+    if (html === null || html === undefined) return true;
+    const text = String(html).replace(/<[^>]*>/g, '').trim();
+    return text === '' || text === COMPOSE_PLACEHOLDER;
+}
+
 function showToast(msg, isError = false) {
     const t = $('toast');
     t.textContent = msg;
@@ -1269,13 +1760,21 @@ function hideError(elId) {
 }
 
 // ============================================================
-// SHA256
+// 文本/HTML 互转
 // ============================================================
-async function sha256(message) {
-    const msgBuffer = new TextEncoder().encode(message);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+/** 把纯文本安全地转成 HTML（先转义再换行），避免把邮件原文当 HTML 注入页面 */
+function textToHtml(text) {
+    return escapeHtml(String(text == null ? '' : text))
+        .replace(/\\r\\n?/g, '\\n')
+        .split('\\n')
+        .join('<br>');
+}
+
+/** 回复主题：已带 Re: 前缀不重复加 */
+function replySubject(subject) {
+    const s = String(subject == null ? '' : subject).trim();
+    if (!s || s === '(无主题)') return 'Re: (无主题)';
+    return /^re\\s*:/i.test(s) ? s : 'Re: ' + s;
 }
 
 // ============================================================
@@ -1327,27 +1826,28 @@ async function checkHasAdmin() {
 // ============================================================
 async function login() {
     const email = $('loginEmail').value.trim();
-    const password = $('loginPassword').value.trim();
+    const password = $('loginPassword').value;
     if (!email || !password) {
         showError('loginError', '请填写完整信息');
         return;
     }
     hideError('loginError');
 
-    const passwordHash = await sha256(password);
-
     try {
         const resp = await fetch('/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password_hash: passwordHash })
+            // 直接送明文口令（HTTPS），由服务端做 PBKDF2 校验。
+            // 以前在前端算无盐 sha256 当口令用，等于把可重放的凭证放在浏览器里。
+            body: JSON.stringify({ email, password })
         });
         const data = await resp.json();
         if (!data.success) {
             showError('loginError', data.error || '登录失败');
             return;
         }
-        document.cookie = 'session=' + data.sessionId + '; path=/; max-age=604800';
+        // 会话 Cookie 由服务端 Set-Cookie 下发（HttpOnly），前端不再自己写
+        $('loginPassword').value = '';
         loadMainApp();
     } catch (e) {
         showError('loginError', '网络错误，请重试');
@@ -1359,11 +1859,15 @@ async function login() {
 // ============================================================
 async function register() {
     const email = $('regEmail').value.trim();
-    const password = $('regPassword').value.trim();
+    const password = $('regPassword').value;
     const regCode = $('regCode').value.trim().toUpperCase();
 
     if (!email || !password) {
         showError('regError', '请填写邮箱和密码');
+        return;
+    }
+    if (password.length < 6) {
+        showError('regError', '密码至少 6 位');
         return;
     }
     hideError('regError');
@@ -1374,13 +1878,11 @@ async function register() {
         return;
     }
 
-    const passwordHash = await sha256(password);
-
     try {
         const resp = await fetch('/register', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password_hash: passwordHash, regCode })
+            body: JSON.stringify({ email, password, regCode })
         });
         const data = await resp.json();
         if (!data.success) {
@@ -1390,6 +1892,7 @@ async function register() {
         showToast('✅ 注册成功！请登录');
         showLogin();
         $('loginEmail').value = email;
+        $('regPassword').value = '';
     } catch (e) {
         showError('regError', '网络错误，请重试');
     }
@@ -1399,7 +1902,14 @@ async function register() {
 // 退出
 // ============================================================
 async function logout() {
-    document.cookie = 'session=; path=/; max-age=0';
+    // 先停掉轮询，否则退出后定时器还在打 /mails，登录页会每 30 秒弹一次错误提示
+    if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
+    try {
+        // 必须让服务端销毁会话：以前只删浏览器 cookie，服务端 session 还能用 7 天
+        await fetch('/logout', { method: 'POST' });
+    } catch (e) { /* 网络失败也继续走本地清理 */ }
+    sessionStorage.removeItem('pendingMailto');
+    mails = [];
     $('mainApp').style.display = 'none';
     $('loginPage').style.display = 'flex';
     $('loginPassword').value = '';
@@ -1481,11 +1991,10 @@ async function loadMainApp() {
 async function saveAdminSettings() {
     const title = $('adminTitle').value.trim();
     const senderPrefix = $('adminSenderPrefix').value.trim();
-    const newPassword = $('adminNewPassword').value.trim();
     const autoReply = document.querySelector('input[name="autoReply"]:checked').value === 'on';
 
+    // 改密码不在这里：走独立的「修改密码」弹窗（/user/password）
     const payload = { title, senderPrefix, autoReply };
-    if (newPassword) payload.password_hash = await sha256(newPassword);
 
     try {
         const resp = await fetch('/admin/settings', {
@@ -1496,7 +2005,6 @@ async function saveAdminSettings() {
         const data = await resp.json();
         if (!data.success) { showToast('保存失败: ' + data.error, true); return; }
         showToast('✅ 设置已保存');
-        $('adminNewPassword').value = '';
         const adminResp = await fetch('/admin/info');
         if (adminResp.ok) {
             const adminData = await adminResp.json();
@@ -1514,6 +2022,62 @@ async function saveAdminSettings() {
             }
         }
     } catch (e) { showToast('网络错误', true); }
+}
+
+// ============================================================
+// 修改自己的密码（所有用户可用，不放在管理员面板里）
+// ============================================================
+function openPasswordModal() {
+    $('pwdCurrent').value = '';
+    $('pwdNew').value = '';
+    $('pwdConfirm').value = '';
+    hideError('pwdError');
+    $('passwordModal').classList.add('active');
+}
+
+function closePasswordModal() {
+    $('passwordModal').classList.remove('active');
+}
+
+async function changePassword() {
+    const currentPassword = $('pwdCurrent').value;
+    const newPassword = $('pwdNew').value;
+    const confirmPassword = $('pwdConfirm').value;
+
+    if (!currentPassword || !newPassword) {
+        showError('pwdError', '请填写当前密码和新密码');
+        return;
+    }
+    if (newPassword.length < 6) {
+        showError('pwdError', '新密码至少 6 位');
+        return;
+    }
+    if (newPassword !== confirmPassword) {
+        showError('pwdError', '两次输入的新密码不一致');
+        return;
+    }
+    if (newPassword === currentPassword) {
+        showError('pwdError', '新密码不能与当前密码相同');
+        return;
+    }
+    hideError('pwdError');
+
+    try {
+        const resp = await fetch('/user/password', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ currentPassword, newPassword })
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            showError('pwdError', data.error || '修改失败');
+            return;
+        }
+        closePasswordModal();
+        showToast('✅ 密码已修改，其他设备上的登录已失效');
+    } catch (e) {
+        showError('pwdError', '网络错误，请重试');
+    }
 }
 
 // ============================================================
@@ -1573,6 +2137,7 @@ function updateSendButtonVisibility() {
 // 邮件列表
 // ============================================================
 let mails = [];
+let mailTotal = 0;
 let currentViewId = null;
 const mailListEl = $('mailList');
 
@@ -1581,7 +2146,9 @@ async function loadMails() {
         const resp = await fetch('/mails');
         if (!resp.ok) throw new Error('加载失败');
         const data = await resp.json();
+        // 服务端现在只返回摘要（正文按需从 /mail/:id 取）
         mails = data.mails || [];
+        mailTotal = typeof data.total === 'number' ? data.total : mails.length;
         renderMails();
         updateStats();
     } catch (e) { showToast('加载邮件失败: ' + e.message, true); }
@@ -1600,11 +2167,13 @@ function renderMails() {
         var time = formatTime(m.timestamp);
         var badge = m.status === 'replied' ? 'replied' : '';
         var badgeText = m.status === 'replied' ? '✅ 已回复' : '📩 未回复';
-        html += '<div class="mail-item" data-id="' + m.id + '" onclick="viewMail(this.dataset.id)">';
+        var clip = m.attachmentCount ? ' 📎' : '';
+        // 内联 onclick 已全部改为 data-action（配合 CSP 的 script-src 'self'）
+        html += '<div class="mail-item" data-action="viewMail" data-arg="' + escapeHtml(m.id) + '">';
         html += '  <div class="avatar">' + from[0].toUpperCase() + '</div>';
         html += '  <div class="info">';
         html += '    <div class="from">' + from + '</div>';
-        html += '    <div class="subject">' + subject + '</div>';
+        html += '    <div class="subject">' + subject + clip + '</div>';
         html += '    <div class="time">' + time + '</div>';
         html += '  </div>';
         html += '  <span class="status-badge ' + badge + '">' + badgeText + '</span>';
@@ -1614,7 +2183,8 @@ function renderMails() {
 }
 
 function updateStats() {
-    $('totalCount').textContent = mails.length;
+    // 总数用服务端索引长度，之前显示的是"当前加载的最近 50 封"，有误导
+    $('totalCount').textContent = mailTotal;
     $('repliedCount').textContent = mails.filter(m => m.status === 'replied').length;
 }
 
@@ -1687,7 +2257,7 @@ async function viewMail(id) {
             attachmentContainer.style.display = 'none';
         }
 
-        // 显示邮件 ID
+        // 显示邮件 ID（用 textContent 组装，避免把服务端数据当 HTML 拼）
         const modal = document.querySelector('#viewModal .modal');
         let idDisplay = document.getElementById('mailIdDisplay');
         if (!idDisplay) {
@@ -1696,7 +2266,7 @@ async function viewMail(id) {
             idDisplay.style.cssText = 'margin-top:12px;padding:8px 12px;background:#f0f2f5;border-radius:6px;font-size:12px;color:#666;word-break:break-all;border:1px solid #e8ecf4;';
             modal.appendChild(idDisplay);
         }
-        idDisplay.innerHTML = '📋 邮件ID：<span style="user-select:all;cursor:pointer;color:#333;">' + mail.id + '</span>';
+        idDisplay.textContent = '📋 邮件ID：' + mail.id;
 
         $('viewModal').classList.add('active');
     } catch (e) {
@@ -1709,15 +2279,26 @@ function closeView() {
     currentViewId = null;
 }
 
-function replyFromView() {
+async function replyFromView() {
     if (!currentViewId) return;
     if (!resendConfigured) { showToast('⚠️ 请先配置 Resend API Key', true); return; }
-    const mail = mails.find(m => m.id === currentViewId);
-    if (!mail) return;
+
+    // 列表里只有摘要，正文要按需取
+    let mail = mails.find(m => m.id === currentViewId);
+    if (!mail || mail.text === undefined) {
+        try {
+            const resp = await fetch('/mail/' + encodeURIComponent(currentViewId));
+            if (resp.ok) mail = await resp.json();
+        } catch (e) { /* 下面统一处理 */ }
+    }
+    if (!mail || mail.from === undefined) { showToast('加载原邮件失败', true); return; }
+
     closeView();
-    $('composeTo').value = mail.from;
-    $('composeSubject').value = 'Re: ' + (mail.subject || '');
-    const replyContent = '<br><br>--- 原始邮件 ---<br>' + (mail.text || '').split(String.fromCharCode(10)).join('<br>');
+    $('composeTo').value = mail.from || '';
+    $('composeSubject').value = replySubject(mail.subject);
+    // 邮件正文一律先转义再插入：以前直接拼 innerHTML，
+    // 发件人只要在纯文本正文里写 <img onerror=...> 就能在点「回复」时执行脚本。
+    const replyContent = '<br><br>--- 原始邮件 ---<br>' + textToHtml(mail.text || '');
     $('composeHtml').value = replyContent;
     $('composePreview').innerHTML = replyContent;
     $('composeModal').classList.add('active');
@@ -1742,7 +2323,7 @@ function openCompose() {
     $('composeTo').value = '';
     $('composeSubject').value = '';
     $('composeHtml').value = '';
-    $('composePreview').innerHTML = '👈 左边写源码，或直接在右边编辑文字';
+    $('composePreview').innerHTML = COMPOSE_PLACEHOLDER;
     attachments = [];
     renderAttachmentList();
     document.getElementById('composeAttachment').value = '';
@@ -1794,7 +2375,7 @@ function renderAttachmentList() {
         return '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;border-bottom:1px solid #f0f0f0;">' +
             '<span>📎 ' + escapeHtml(att.filename) + '</span>' +
             '<span style="color:#999;font-size:11px;">(' + sizeKB + ' KB)</span>' +
-            '<button onclick="removeAttachment(' + index + ')" style="margin-left:auto;background:#e74c3c;color:white;border:none;border-radius:4px;padding:0 8px;cursor:pointer;font-size:12px;">✕</button>' +
+            '<button data-action="removeAttachment" data-arg="' + index + '" style="margin-left:auto;background:#e74c3c;color:white;border:none;border-radius:4px;padding:0 8px;cursor:pointer;font-size:12px;">✕</button>' +
         '</div>';
     }).join('');
 }
@@ -1816,8 +2397,7 @@ async function sendCompose() {
 
     const preview = $('composePreview');
     const previewContent = preview.innerHTML;
-    const placeholder = '👈 左边写源码，或直接在右边编辑文字';
-    if (previewContent && previewContent.trim() !== placeholder) $('composeHtml').value = previewContent;
+    if (!isComposePlaceholder(previewContent)) $('composeHtml').value = previewContent;
 
     const html = $('composeHtml').value.trim();
     if (!to || !subject || !html) { showToast('请填写完整信息', true); return; }
@@ -1927,8 +2507,11 @@ function openComposeWithTo(to) {
     if (email) $('composeTo').value = email;
     if (subject) $('composeSubject').value = subject;
     if (body) {
-        $('composeHtml').value = body;
-        $('composePreview').innerHTML = body;
+        // mailto 的 body 完全来自 URL，以前直接进 innerHTML —— 打开一条链接就能执行脚本。
+        // 这里当纯文本处理：先转义再换行。
+        const bodyHtml = textToHtml(body);
+        $('composeHtml').value = bodyHtml;
+        $('composePreview').innerHTML = bodyHtml;
     }
 }
 
@@ -1936,43 +2519,35 @@ function openComposeWithTo(to) {
 // 初始化
 // ============================================================
 async function init() {
-    const sessionId = document.cookie.match(/session=([^;]+)/)?.[1];
     const urlParams = new URLSearchParams(window.location.search);
     const mailtoTo = urlParams.get('to');
 
-    if (!sessionId) {
-        if (mailtoTo) sessionStorage.setItem('pendingMailto', mailtoTo);
-        try {
-            const resp = await fetch('/no-login/info');
-            const data = await resp.json();
-            if (data.title) document.title = data.title;
-            if (data.account) $('loginHint').textContent = '管理员账号：' + data.account;
-        } catch { /* ignore */ }
-        $('loginPage').style.display = 'flex';
-        $('registerPage').style.display = 'none';
-        return;
-    }
-
+    // 会话 Cookie 是 HttpOnly 的，JS 读不到，只能靠 /user/info 判断登录状态
     try {
         const resp = await fetch('/user/info');
         if (resp.ok) {
-            await loadMainApp();
-            if (mailtoTo) openComposeWithTo(mailtoTo);
-            else {
-                const pending = sessionStorage.getItem('pendingMailto');
-                if (pending) {
-                    sessionStorage.removeItem('pendingMailto');
-                    openComposeWithTo(pending);
+            const userData = await resp.json();
+            if (userData && userData.success) {
+                await loadMainApp();
+                if (mailtoTo) openComposeWithTo(mailtoTo);
+                else {
+                    const pending = sessionStorage.getItem('pendingMailto');
+                    if (pending) {
+                        sessionStorage.removeItem('pendingMailto');
+                        openComposeWithTo(pending);
+                    }
                 }
+                return;
             }
-            return;
         }
-    } catch { /* ignore */ }
+    } catch { /* 未登录或网络问题，走登录页 */ }
 
+    if (mailtoTo) sessionStorage.setItem('pendingMailto', mailtoTo);
     try {
         const resp = await fetch('/no-login/info');
         const data = await resp.json();
         if (data.title) document.title = data.title;
+        if (data.account) $('loginHint').textContent = '管理员账号：' + data.account;
     } catch { /* ignore */ }
     $('loginPage').style.display = 'flex';
     $('registerPage').style.display = 'none';
@@ -1988,16 +2563,14 @@ function setupEditorSync() {
     if (textarea) {
         textarea.addEventListener('input', function() {
             const html = textarea.value;
-            const placeholder = '<span class="empty-hint">👈 左边写源码，或直接在右边编辑文字</span>';
-            preview.innerHTML = html.trim() ? html : placeholder;
+            preview.innerHTML = html.trim() ? html : COMPOSE_PLACEHOLDER_HTML;
         });
     }
 
     if (preview) {
         preview.addEventListener('input', function() {
             const html = preview.innerHTML;
-            const placeholder = '<span class="empty-hint">👈 左边写源码，或直接在右边编辑文字</span>';
-            if (html.trim() && html !== placeholder) {
+            if (!isComposePlaceholder(html)) {
                 textarea.value = html;
             }
         });
@@ -2007,6 +2580,17 @@ function setupEditorSync() {
 // ============================================================
 // 事件绑定
 // ============================================================
+// 统一用事件委托处理所有按钮：内联 onclick 已被移除以配合 CSP 的 script-src 'self'
+document.addEventListener('click', function(e) {
+    const target = e.target && e.target.closest ? e.target.closest('[data-action]') : null;
+    if (!target) return;
+    const action = target.dataset.action;
+    const fn = window[action];
+    if (typeof fn !== 'function') return;
+    e.preventDefault();
+    fn(target.dataset.arg, target);
+});
+
 document.addEventListener('DOMContentLoaded', function() {
     init();
     setupEditorSync();
@@ -2014,19 +2598,30 @@ document.addEventListener('DOMContentLoaded', function() {
 
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Enter') {
-        if ($('loginPage').style.display !== 'none') login();
-        else if ($('registerPage').style.display !== 'none') register();
+        const loginPage = $('loginPage');
+        const registerPage = $('registerPage');
+        if (loginPage && loginPage.style.display !== 'none') login();
+        else if (registerPage && registerPage.style.display !== 'none') register();
     }
 });`;
             return new Response(js, {
                 headers: {
                     'Content-Type': 'application/javascript; charset=utf-8',
-                    'Cache-Control': 'public, max-age=86400'
+                    // 必须 no-cache：客户端与接口的契约会随版本变化（例如登录字段），
+                    // 如果浏览器缓存了旧 app.js，就会出现「旧前端 + 新后端」直接登不上。
+                    'Cache-Control': 'no-cache'
                 },
             });
         }
 
         return Response.json({ error: '未找到该路由' }, { status: 404 });
+    },
+};
+
+export default {
+    email: worker.email,
+    async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+        return withSecurityHeaders(await worker.fetch(request, env, ctx));
     },
 };
 

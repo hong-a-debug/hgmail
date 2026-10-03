@@ -1,0 +1,19 @@
+# 依赖
+node_modules/
+
+# Wrangler 本地状态与构建产物（含旧的部署包，体积大且无意义）
+.wrangler/
+
+# 构建输出
+dist/
+
+# 本地密钥：Cloudflare 的 secret 请用 wrangler secret put，不要提交
+.dev.vars
+.env
+.env.*
+
+# 日志与系统文件
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db
