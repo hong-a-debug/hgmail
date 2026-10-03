@@ -224,6 +224,15 @@ PWA 让你可以把网页"安装"到桌面，像原生软件一样使用。
 
 点 **允许**，之后在任意网页点击 `mailto:test@example.com`，会自动打开你的邮件应用。
 
+### ⚠️ 重要：图标必须能公开访问
+
+Cloudflare Access 会拦截 PWA 资源（`/icon.png`、`/manifest.json`、`/sw.js`），导致图标加载失败，PWA 无法安装。
+
+**解决方法**：
+1. Cloudflare Zero Trust → 访问控制 → 应用程序
+2. 删除或禁用保护 `mail.你的域名` 的应用
+3. 或用 Bypass 策略放行这三个路径
+
 ---
 
 ## 📎 附件支持
@@ -328,6 +337,7 @@ const attachments = [];
 |:-----|:----:|:-----|:----:|
 | `/` | GET | 管理界面 | 任何人 |
 | `/manifest.json` | GET | PWA 清单 | 任何人 |
+| `/icon.png` | GET | PWA 图标 | 任何人 |
 | `/sw.js` | GET | Service Worker | 任何人 |
 | `/new-email` | GET | mailto 链接跳转 | 任何人 |
 | `/register` | POST | 用户注册 | 任何人 |
@@ -356,6 +366,7 @@ const attachments = [];
 .
 ├── src/
 │   ├── index.ts           # Worker 主入口
+│   ├── icon-base64.ts     # PWA 图标（Base64）
 │   ├── template.html      # 前端 HTML 模板
 │   ├── auth.ts            # 用户/会话管理
 │   ├── admin.ts           # 管理员设置
@@ -376,6 +387,16 @@ const attachments = [];
 ---
 
 ## ❓ 常见问题
+
+<details>
+<summary><b>PWA 安装图标不显示？</b></summary>
+
+1. 确认图标是 PNG 格式（不是 SVG）
+2. 确认 `manifest.json` 里的 icons 有 192x192 和 512x512
+3. 确认 `/icon.png` 能公开访问（无 Cloudflare Access 拦截）
+4. 清除缓存后强制刷新
+
+</details>
 
 <details>
 <summary><b>推送通知不弹窗？</b></summary>
@@ -416,13 +437,6 @@ const attachments = [];
 </details>
 
 <details>
-<summary><b>邮件中的 &lt;script&gt; 标签会被执行吗？</b></summary>
-
-**不会。** 系统会自动检测并删除所有 `<script>` 标签及其内容。
-
-</details>
-
-<details>
 <summary><b>如何关闭自动回复？</b></summary>
 
 管理员登录后，在左侧 **系统设置** → **自动回复** 中，选择 **关闭** 并保存。
@@ -455,13 +469,13 @@ const attachments = [];
 
 ---
 
+<div align="center">
+
 ## 📝 License
 
 MIT
 
 ---
-
-<div align="center">
 
 **⭐ 如果这个项目对你有帮助，请给个 Star 支持一下！**
 
