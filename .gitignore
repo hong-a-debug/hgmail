@@ -1,6 +1,9 @@
 # 依赖
 node_modules/
 
+# 锁文件：按要求不提交（本地文件仍保留，供 npm ci / 查看实际解析到的版本）
+package-lock.json
+
 # Wrangler 本地状态与构建产物（含旧的部署包，体积大且无意义）
 .wrangler/
 
