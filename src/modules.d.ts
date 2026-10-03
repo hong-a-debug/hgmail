@@ -10,3 +10,16 @@ declare module '*.html?raw' {
     const content: string;
     export default content;
 }
+
+// 前端资源以文本模块导入（见 wrangler.toml 的 [[rules]]）。
+// 放在独立文件里就不必再写进模板字符串，反斜杠不会被吃掉，
+// 也能直接对这些文件跑语法检查和格式化。
+declare module '*.css' {
+    const content: string;
+    export default content;
+}
+
+declare module '*.js' {
+    const content: string;
+    export default content;
+}

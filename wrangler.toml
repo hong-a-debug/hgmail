@@ -26,3 +26,12 @@ id = "你的 EMAIL_USER 命名空间 id"
 [[r2_buckets]]
 binding = "ATTACHMENTS"
 bucket_name = "attachments"
+
+# 前端资源以文本形式打包进来。
+# 注意：一旦自己定义 [[rules]]，wrangler 内置的默认规则就全部失效，
+# 所以 .html / .txt 这些原本默认按 Text 处理的也要显式写回来；
+# app.js 则是为了覆盖内置的 ESModule 规则（否则它会被当模块执行而不是当字符串导入）。
+[[rules]]
+type = "Text"
+globs = ["**/*.html", "**/*.txt", "**/*.css", "**/app.js"]
+fallthrough = false
