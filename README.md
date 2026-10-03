@@ -403,8 +403,8 @@ const attachments = [];
 | `/mails` | GET | 邮件列表 | 已登录 |
 | `/mail/:id` | GET | 邮件详情 | 已登录 |
 | `/mail/:id` | DELETE | 删除邮件 | 已登录 |
-| `/send` | POST | 发送邮件 | 已登录 |
-| `/download/:id` | GET | 下载第一个附件 | 已登录 |
+| `/send` | POST | 发送邮件（html 与 text 至少一样） | 已登录 |
+| `/download/:id` | GET | 下载附件，`?index=N` 选第几个（默认第一个） | 已登录 |
 | `/attachments/:key` | GET | 下载指定附件 | 已登录 |
 | `/push/vapid-public-key` | GET | 获取 VAPID 公钥 | 任何人 |
 | `/push/subscribe` | POST | 保存推送订阅 | 已登录 |

@@ -528,7 +528,11 @@ async function viewMail(id) {
                 var att = attachments[i];
                 attHtml += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid #eee;">';
                 attHtml += '  <span style="font-size:13px;">📎 ' + escapeHtml(att.filename) + '</span>';
-                attHtml += '  <span style="font-size:11px;color:#999;">(' + (att.size / 1024).toFixed(1) + ' KB)</span>';
+                // 历史邮件的附件可能没有 size 字段，直接除会显示 NaN
+                var sizeText = typeof att.size === 'number' && isFinite(att.size)
+                    ? (att.size / 1024).toFixed(1) + ' KB'
+                    : '大小未知';
+                attHtml += '  <span style="font-size:11px;color:#999;">(' + sizeText + ')</span>';
                 attHtml += '  <a href="/attachments/' + encodeURIComponent(att.key) + '" target="_blank" style="font-size:12px;color:#667eea;margin-left:auto;">下载</a>';
                 attHtml += '</div>';
             }

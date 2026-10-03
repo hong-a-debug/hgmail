@@ -491,7 +491,11 @@ const worker = {
                 // 用 sanitizeSenderPrefix 兜住历史遗留的脏值，避免拼出非法 From
                 const prefix = sanitizeSenderPrefix(await env.EMAIL_USER.get('admin:sender_prefix'));
                 const sender = `${prefix}@${env.DOMAIN}`;
-                await sendAutoReply(env.RESEND_API_KEY, sender, parsed.from, parsed.subject);
+                // 把原邮件的 Message-ID 带过去，对方客户端才能归到同一会话
+                const originalMessageId = message?.headers?.get('Message-ID')
+                    || message?.headers?.get('Message-Id')
+                    || undefined;
+                await sendAutoReply(env.RESEND_API_KEY, sender, parsed.from, parsed.subject, originalMessageId);
                 const updated = { ...emailData, status: 'replied' as const };
                 await env.EMAIL.put(messageId, JSON.stringify(updated), { expirationTtl: MAIL_TTL_SECONDS });
                 console.log('✅ 邮件已存储并自动回复');
@@ -588,25 +592,11 @@ const worker = {
         }
 
         // ============================================================
-        // 获取域名
-        // ============================================================
-        if (path === '/admin/domain') {
-            return Response.json({ domain: env.DOMAIN });
-        }
-
-        // ============================================================
         // 检查是否有管理员
         // ============================================================
         if (path === '/admin/check') {
             const adminExists = await env.EMAIL_USER.get('_admin_exists');
             return Response.json({ hasAdmin: adminExists === 'true' });
-        }
-
-        // ============================================================
-        // 获取管理员账号
-        // ============================================================
-        if (path === '/admin/account') {
-            return Response.json({ account: env.ADMIN_ACCOUNT || 'admin' });
         }
 
         // ============================================================
@@ -809,13 +799,6 @@ const worker = {
         }
 
         // ============================================================
-        // 检查 Resend
-        // ============================================================
-        if (path === '/check-resend') {
-            return Response.json({ configured: !!env.RESEND_API_KEY });
-        }
-
-        // ============================================================
         // 下载附件（通过邮件 ID）
         // ============================================================
         if (path.startsWith('/download/') && request.method === 'GET') {
@@ -843,12 +826,20 @@ const worker = {
                 return Response.json({ error: '无权下载' }, { status: 403 });
             }
 
-            if (!mail.attachments || mail.attachments.length === 0) {
+            const list = mail.attachments || [];
+            if (list.length === 0) {
                 return Response.json({ error: '该邮件没有附件' }, { status: 404 });
             }
 
-            const firstAttachment = mail.attachments[0];
-            const attachment = await getAttachment(env, firstAttachment.key);
+            // ?index=N 选择第几个附件。以前无论有多少附件都只能拿到第一个，
+            // 多附件邮件的其余附件在这个接口上根本无法下载。
+            const rawIndex = url.searchParams.get('index');
+            const index = rawIndex === null ? 0 : Number.parseInt(rawIndex, 10);
+            if (!Number.isInteger(index) || index < 0 || index >= list.length) {
+                return Response.json({ error: `附件序号超出范围（这封邮件共 ${list.length} 个附件）` }, { status: 400 });
+            }
+
+            const attachment = await getAttachment(env, list[index].key);
             if (!attachment) {
                 return Response.json({ error: '附件文件不存在' }, { status: 404 });
             }
@@ -1041,6 +1032,13 @@ const worker = {
                     return Response.json({ success: false, error: '附件总大小不能超过 10MB' }, { status: 400 });
                 }
 
+                // 允许只发纯文本：html 和 text 至少有一样有内容即可
+                const html = String(body.html || '');
+                const text = String(body.text || '');
+                if (!html.trim() && !text.trim()) {
+                    return Response.json({ success: false, error: '邮件内容不能为空' }, { status: 400 });
+                }
+
                 // 每个用户每天发信上限，避免账号被拿来做发信跳板
                 const quotaKey = `send_quota:${normalizeEmail(session.email)}:${new Date().toISOString().slice(0, 10)}`;
                 const used = parseInt((await env.EMAIL_USER.get(quotaKey)) || '0', 10);
@@ -1055,8 +1053,8 @@ const worker = {
                     sender,
                     toList,
                     String(body.subject || ''),
-                    String(body.html || ''),
-                    body.text,
+                    html,
+                    text,
                     attachments
                 );
                 try {
