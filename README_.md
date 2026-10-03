@@ -296,6 +296,7 @@ npm -v     # 显示 10.x.x
 ├── tsconfig.json          # TypeScript 配置
 ├── README.md              # 主文档
 ├── README_.md             # 部署前准备文档（本文件）
+├── LICENSE                # 许可证
 └── 部署.bat               # Windows 一键部署脚本
 ```
 
