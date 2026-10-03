@@ -324,10 +324,106 @@ function openPasswordModal() {
     $('pwdConfirm').value = '';
     hideError('pwdError');
     $('passwordModal').classList.add('active');
+    loadSessions();
 }
 
 function closePasswordModal() {
     $('passwordModal').classList.remove('active');
+}
+
+// ============================================================
+// 登录设备（查看并踢出其他设备）
+// ============================================================
+async function loadSessions() {
+    const box = $('sessionList');
+    if (!box) return;
+    box.textContent = '加载中…';
+    try {
+        const resp = await fetch('/user/sessions');
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            box.textContent = '加载失败：' + (data.error || resp.status);
+            return;
+        }
+        renderSessions(data.sessions || []);
+    } catch (e) { box.textContent = '网络错误'; }
+}
+
+function renderSessions(list) {
+    const box = $('sessionList');
+    if (!list.length) { box.textContent = '没有其它登录设备'; return; }
+    box.innerHTML = list.map(function (s) {
+        const when = s.created_at ? formatTime(s.created_at) : '时间未知';
+        const tail = s.current
+            ? '<span style="color:#27ae60;font-size:12px;">当前设备</span>'
+            : '<button class="page-btn" data-action="revokeSession" data-arg="' + escapeHtml(s.id) + '">退出该设备</button>';
+        return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f0f0f0;">'
+            + '<span style="flex:1;">' + escapeHtml(when) + '</span>' + tail + '</div>';
+    }).join('');
+}
+
+async function revokeSession(hash) {
+    if (!hash) return;
+    if (!confirm('确定要让这个设备退出登录吗？')) return;
+    try {
+        const resp = await fetch('/user/sessions/revoke', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: hash })
+        });
+        const data = await resp.json();
+        if (!data.success) { showToast('操作失败：' + (data.error || ''), true); return; }
+        showToast(data.removed ? '✅ 该设备已退出' : '没找到这个设备');
+        loadSessions();
+    } catch (e) { showToast('网络错误', true); }
+}
+
+// ============================================================
+// 垃圾邮件隔离区（管理员）
+// ============================================================
+function openSpamModal() {
+    $('spamModal').classList.add('active');
+    loadSpam();
+}
+
+function closeSpamModal() {
+    $('spamModal').classList.remove('active');
+}
+
+async function loadSpam() {
+    const box = $('spamList');
+    if (!box) return;
+    box.textContent = '加载中…';
+    try {
+        const resp = await fetch('/admin/spam');
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            box.textContent = '加载失败：' + (data.error || resp.status);
+            return;
+        }
+        const list = data.mails || [];
+        if (!list.length) { box.textContent = '隔离区是空的'; return; }
+        box.innerHTML = list.map(function (m) {
+            return '<div style="padding:8px 0;border-bottom:1px solid #f0f0f0;">'
+                + '<div style="font-size:13px;font-weight:600;">' + escapeHtml(m.subject || '(无主题)') + '</div>'
+                + '<div style="font-size:12px;color:#999;margin-top:2px;">'
+                + escapeHtml(m.from || '') + ' · ' + escapeHtml(formatTime(m.timestamp)) + '</div>'
+                + (m.snippet ? '<div style="font-size:12px;color:#9aa3b2;margin-top:2px;">' + escapeHtml(m.snippet) + '</div>' : '')
+                + '<button class="page-btn" style="margin-top:6px;" data-action="deleteSpam" data-arg="' + escapeHtml(m.id) + '">删除</button>'
+                + '</div>';
+        }).join('');
+    } catch (e) { box.textContent = '网络错误'; }
+}
+
+async function deleteSpam(id) {
+    if (!id) return;
+    if (!confirm('确定删除这封隔离邮件吗？')) return;
+    try {
+        const resp = await fetch('/admin/spam/' + encodeURIComponent(id), { method: 'DELETE' });
+        if (!resp.ok) throw new Error('删除失败');
+        showToast('已删除');
+        loadSpam();
+    } catch (e) { showToast('删除失败', true); }
 }
 
 async function changePassword() {

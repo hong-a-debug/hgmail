@@ -400,6 +400,10 @@ const attachments = [];
 | `/login` | POST | 用户登录 | 任何人 |
 | `/logout` | POST | 退出登录（销毁服务端会话） | 已登录 |
 | `/user/password` | POST | 修改自己的密码 | 已登录 |
+| `/user/sessions` | GET | 查看自己的登录设备（返回短哈希而非会话 id） | 已登录 |
+| `/user/sessions/revoke` | POST | 踢出某个登录设备 | 已登录 |
+| `/admin/spam` | GET | 垃圾邮件隔离区列表 | 管理员 |
+| `/admin/spam/:id` | DELETE | 删除一封隔离邮件 | 管理员 |
 | `/no-login/info` | GET | 未登录用户获取标题 | 任何人 |
 | `/user/info` | GET | 已登录用户获取信息 | 已登录 |
 | `/admin/info` | GET | 管理员获取完整设置 | 管理员 |

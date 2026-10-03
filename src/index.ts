@@ -1,4 +1,5 @@
 import { Env, StoredEmail, MailIndexEntry } from './types';
+import { sha256 } from './utils';
 import { parseEmail } from './email-parser';
 import { sendAutoReply, sendEmail } from './resend-client';
 import { saveAttachments, getAttachment, deleteAttachments } from './attachment';
@@ -1127,6 +1128,89 @@ const worker = {
             await env.EMAIL.put(id, JSON.stringify(mail), { expirationTtl: MAIL_TTL_SECONDS });
             await updateIndexStatus(env, mail);
             return Response.json({ success: true, status });
+        }
+
+        // ============================================================
+        // 我的登录设备
+        // ============================================================
+        if (path === '/user/sessions' && request.method === 'GET') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ error: '未登录' }, { status: 401 });
+
+            const currentId = readSessionId(request);
+            const listed = await env.EMAIL_USER.list({ prefix: 'session:' });
+            const sessions: { id: string; created_at: string; current: boolean }[] = [];
+            for (const entry of listed.keys) {
+                const sid = entry.name.slice('session:'.length);
+                const s = await getSession(env, sid);
+                if (!s || normalizeEmail(s.email) !== normalizeEmail(session.email)) continue;
+                sessions.push({
+                    // 不把会话 id 原样返回给前端：万一被脚本读到就等于会话被接管，
+                    // 这里只返回它的短哈希，踢设备时按哈希匹配。
+                    id: (await sha256(sid)).slice(0, 16),
+                    created_at: s.created_at || '',
+                    current: sid === currentId,
+                });
+            }
+            sessions.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+            return Response.json({ success: true, sessions });
+        }
+
+        // ============================================================
+        // 踢出某个登录设备（当前设备请用「退出登录」）
+        // ============================================================
+        if (path === '/user/sessions/revoke' && request.method === 'POST') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ error: '未登录' }, { status: 401 });
+
+            const body = await request.json().catch(() => ({})) as { id?: string };
+            const target = String(body.id || '');
+            if (!target) return Response.json({ success: false, error: '缺少设备标识' }, { status: 400 });
+
+            const currentId = readSessionId(request);
+            const listed = await env.EMAIL_USER.list({ prefix: 'session:' });
+            let removed = 0;
+            for (const entry of listed.keys) {
+                const sid = entry.name.slice('session:'.length);
+                if (sid === currentId) continue;
+                if ((await sha256(sid)).slice(0, 16) !== target) continue;
+                const s = await getSession(env, sid);
+                if (!s || normalizeEmail(s.email) !== normalizeEmail(session.email)) continue;
+                await destroySession(env, sid);
+                removed++;
+            }
+            return Response.json({ success: true, removed });
+        }
+
+        // ============================================================
+        // 垃圾邮件隔离区（管理员）
+        // ============================================================
+        if (path === '/admin/spam' && request.method === 'GET') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ error: '未登录' }, { status: 401 });
+            if (session.role !== 'admin') return Response.json({ error: '需要管理员权限' }, { status: 403 });
+
+            const listed = await env.EMAIL.list({ prefix: 'spam:', limit: 50 });
+            const mails: MailIndexEntry[] = [];
+            for (const entry of listed.keys) {
+                const data = await env.EMAIL.get(entry.name);
+                if (!data) continue;
+                const mail = safeJsonParse<StoredEmail | null>(data, null);
+                if (mail) mails.push(mailSummary(mail));
+            }
+            mails.sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)));
+            return Response.json({ success: true, mails, truncated: listed.list_complete === false });
+        }
+
+        if (path.startsWith('/admin/spam/') && request.method === 'DELETE') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ error: '未登录' }, { status: 401 });
+            if (session.role !== 'admin') return Response.json({ error: '需要管理员权限' }, { status: 403 });
+
+            const id = safeDecode(path.replace('/admin/spam/', ''));
+            if (!id) return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
+            await env.EMAIL.delete(`spam:${id}`);
+            return Response.json({ success: true });
         }
 
         // ============================================================

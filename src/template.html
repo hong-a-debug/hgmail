@@ -19,7 +19,7 @@
     <link rel="manifest" href="/manifest.json" />
 
     <!-- ===== 样式 ===== -->
-    <link rel="stylesheet" href="/style.css?v=6" />
+    <link rel="stylesheet" href="/style.css?v=7" />
 </head>
 <body>
 
@@ -122,6 +122,11 @@
                     <div class="field-hint">开启后收到新邮件会推送通知</div>
                 </div>
                 <div class="field">
+                    <label>垃圾邮件隔离区</label>
+                    <div class="field-hint" style="margin-bottom:6px;">被判为垃圾的邮件保留在这里，7 天后自动过期。</div>
+                    <button type="button" data-action="openSpamModal" style="padding:8px 16px;background:#667eea;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;">查看隔离区</button>
+                </div>
+                <div class="field">
                     <label>修改密码</label>
                     <div class="field-hint" style="margin-bottom:6px;">密码在页面右上角的「🔑 修改密码」里改，所有用户（含管理员）都一样。</div>
                     <button type="button" data-action="openPasswordModal" style="padding:8px 16px;background:#667eea;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;">打开修改密码</button>
@@ -219,6 +224,26 @@
             修改成功后，其他设备上的登录会全部失效（当前这台保持登录）。
         </div>
         <button class="send-btn" style="margin-top:16px;" data-action="changePassword">保存新密码</button>
+
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid #eee;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+                <strong style="font-size:14px;">登录设备</strong>
+                <button class="page-btn" data-action="loadSessions">刷新</button>
+            </div>
+            <div id="sessionList" style="margin-top:8px;font-size:13px;color:#666;">加载中…</div>
+        </div>
+    </div>
+</div>
+
+<!-- ===== 垃圾邮件隔离区弹窗（管理员） ===== -->
+<div class="modal-overlay" id="spamModal">
+    <div class="modal" style="max-width:640px;">
+        <div class="modal-header"><h3>🚫 垃圾邮件隔离区</h3><button class="modal-close" data-action="closeSpamModal">×</button></div>
+        <div style="font-size:12px;color:#999;margin-bottom:10px;line-height:1.6;">
+            被判为垃圾的邮件不会直接丢弃，而是保留在这里（7 天后自动过期），
+            既不进任何人的收件箱，附件也不会写入 R2。
+        </div>
+        <div id="spamList" style="font-size:13px;color:#666;">加载中…</div>
     </div>
 </div>
 
@@ -228,6 +253,6 @@
 <!-- 带版本号：浏览器里可能还留着旧的 no-cache 之前的 app.js 缓存，
      换 URL 可以直接绕开，避免「旧前端 + 新后端」导致登录失败。
      以后改动 app.js 只要把这个 v= 的值加一即可。 -->
-<script src="/app.js?v=6"></script>
+<script src="/app.js?v=7"></script>
 </body>
 </html>
