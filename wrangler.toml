@@ -1,7 +1,6 @@
 # ⚠️ 这是提交到仓库的模板版本，所有值都是占位符。
-# 本机实际部署用的配置（真实域名与 KV 命名空间 id）只保存在本地，
-# 并用 `git update-index --skip-worktree wrangler.toml` 标记为不参与提交，
-# 因此本地改这里也不会被 git 记录，`wrangler deploy` 照常使用真实值。
+# 本机实际部署用的 wrangler.toml 在上一级目录（源文件夹）里，含真实域名与 KV 命名空间 id，
+# 那个目录不参与上传，所以真实配置不会进仓库。
 # 克隆本仓库后，把下面的占位符替换成你自己的值即可部署。
 
 name = "my-email-worker"
