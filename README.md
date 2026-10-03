@@ -24,17 +24,20 @@
 **📥 收件与存储**
 - 收到的邮件自动存入 KV
 - 支持附件存储到 R2
-- 邮件列表实时刷新
+- 支持多人收件（To / 抄送）
+- HTML 邮件的内嵌图片正常显示
 
 **👥 多用户**
 - 注册/登录系统
 - 每个用户独立收件箱
 - 管理员可看全部邮件
+- 任何用户都能自己改密码
 
 **🚫 垃圾过滤**
 - 加权评分 + 变体识别
 - 词边界匹配
 - 白名单保护
+- 命中后隔离保留，不会直接丢弃
 
 </td>
 <td width="50%">
@@ -53,6 +56,24 @@
 - 安装为桌面应用
 - 支持 mailto: 链接
 - 独立窗口运行
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**🔐 账号安全**
+- 口令 PBKDF2 加盐存储
+- 会话走 HttpOnly Cookie
+- 登录失败自动限速
+
+</td>
+<td width="50%">
+
+**🛡️ 邮件安全**
+- 正文一律转义后渲染
+- 内嵌脚本会被清理
+- 自动回复有回环防护
 
 </td>
 </tr>
@@ -102,6 +123,9 @@ npx wrangler deploy
 ---
 
 ## 🚀 部署后配置
+
+> ⚠️ 仓库里的 `wrangler.toml` 是**占位符模板**（`example.com`、`你的 ... id`），里面没有任何真实信息。
+> 请把下面各步得到的真实值填进去，再执行部署。
 
 ### 第一步：创建 KV 命名空间
 
@@ -184,9 +208,10 @@ npx wrangler secret put VAPID_PRIVATE_KEY
 
 ### 第三步：安装依赖并部署
 
+`web-push` 已经写在 `package.json` 的 dependencies 里，直接 `npm install` 即可，不需要再单独添加。
+
 ```bash
-npm install web-push
-npm install --save-dev @types/web-push
+npm install
 npx wrangler deploy
 ```
 
@@ -277,6 +302,29 @@ const attachments = [];
 
 ## 🛡️ 安全机制
 
+### 账号与会话
+
+| 机制 | 说明 |
+|:-----|:-----|
+| 口令存储 | PBKDF2-SHA256，10 万次迭代 + 每用户随机盐 |
+| 旧数据兼容 | 历史的无盐 SHA-256 口令仍能登录，登录成功后自动升级为 PBKDF2 |
+| 会话凭证 | 服务端下发 `HttpOnly; Secure; SameSite=Lax` Cookie，前端 JS 读不到 |
+| 退出登录 | 同时销毁服务端会话并清除 Cookie，被复制过的凭证立即失效 |
+| 修改密码 | 校验当前密码后写入，并注销该用户在其他设备上的全部会话 |
+| 登录限速 | 同一 IP 15 分钟内失败 10 次后拒绝登录 |
+| 账号枚举 | 账号不存在与密码错误返回同一句提示 |
+
+### 邮件内容
+
+| 机制 | 说明 |
+|:-----|:-----|
+| 正文渲染 | 邮件正文一律先转义再渲染，`<img onerror=...>` 之类的载荷不会执行 |
+| 隔离展示 | 邮件 HTML 在带 `sandbox` 的 iframe 中渲染，且不含 `allow-scripts` |
+| Script 清理 | 邮件中的 `<script>` 标签及其内容会被删除 |
+| 附件下载 | 强制 `attachment` + `nosniff`，只有图片/音视频允许内联返回 |
+| 响应头 | 统一附加 CSP、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer` |
+| 发信限制 | 单次收件人上限 50、附件上限 10MB、按用户每日配额 |
+
 ### 垃圾邮件过滤
 
 系统使用**加权评分 + 变体识别**过滤垃圾邮件：
@@ -289,10 +337,7 @@ const attachments = [];
 | 长度归一化 | 长邮件按比例折算 |
 | 中英文区分 | 中文字符权重按 2.5 倍计算 |
 | 白名单优先 | 验证码、注册等邮件不会被拦截 |
-
-### Script 标签清理
-
-邮件中的 `<script>` 标签及其所有内容会被自动删除。
+| 命中后处理 | 隔离保留而不是丢弃，见「常见问题」 |
 
 ---
 
@@ -317,6 +362,15 @@ const attachments = [];
    - **密码：你自己设的**
    - **注册码：留空**（第一个用户不需要）
 
+### 修改自己的密码
+
+登录后点页面右上角的 **🔑 修改密码**：
+
+1. 填写**当前密码**和**新密码**（至少 6 位，两次输入要一致）
+2. 保存后，**其他设备上的登录会全部失效**，当前这台保持登录
+
+管理员和普通用户用的是同一个入口，不在左侧「系统设置」里。忘记密码目前没有自助找回。
+
 ### 管理员功能
 
 | 功能 | 说明 |
@@ -325,7 +379,6 @@ const attachments = [];
 | 修改页面标题 | 自定义网站标题 |
 | 修改发件邮箱前缀 | 自定义发件人地址 |
 | 生成注册码 | 为新用户生成注册码 |
-| 修改管理员密码 | 更新管理员登录密码 |
 | 自动回复开关 | 开启/关闭自动回复 |
 | **开启推送** | 收到新邮件时桌面通知 |
 
@@ -342,7 +395,8 @@ const attachments = [];
 | `/new-email` | GET | mailto 链接跳转 | 任何人 |
 | `/register` | POST | 用户注册 | 任何人 |
 | `/login` | POST | 用户登录 | 任何人 |
-| `/logout` | POST | 退出登录 | 已登录 |
+| `/logout` | POST | 退出登录（销毁服务端会话） | 已登录 |
+| `/user/password` | POST | 修改自己的密码 | 已登录 |
 | `/no-login/info` | GET | 未登录用户获取标题 | 任何人 |
 | `/user/info` | GET | 已登录用户获取信息 | 已登录 |
 | `/admin/info` | GET | 管理员获取完整设置 | 管理员 |
@@ -365,20 +419,21 @@ const attachments = [];
 ```
 .
 ├── src/
-│   ├── index.ts           # Worker 主入口
-│   ├── icon-base64.ts     # PWA 图标（Base64）
+│   ├── index.ts           # Worker 主入口（HTTP 路由 + 内嵌前端脚本）
 │   ├── template.html      # 前端 HTML 模板
-│   ├── auth.ts            # 用户/会话管理
-│   ├── admin.ts           # 管理员设置
+│   ├── auth.ts            # 用户/会话管理 + 口令散列（PBKDF2）
+│   ├── admin.ts           # 管理员设置 + 注册码
 │   ├── attachment.ts      # 附件处理（R2 存储）
 │   ├── email-parser.ts    # 邮件解析 + 垃圾过滤
 │   ├── resend-client.ts   # Resend 发送封装
 │   ├── utils.ts           # SHA256 工具
 │   ├── types.ts           # 类型定义
-│   └── types.d.ts         # 类型声明
-├── wrangler.toml          # Cloudflare 配置
+│   └── modules.d.ts       # HTML 模块类型声明
+├── wrangler.toml          # Cloudflare 配置（仓库里是占位符模板）
 ├── package.json           # 依赖管理
 ├── tsconfig.json          # TypeScript 配置
+├── .gitignore             # 忽略 node_modules / .wrangler / .dev.vars
+├── .gitattributes         # 统一换行符
 ├── README.md              # 项目说明
 ├── README_.md             # 部署前准备文档
 ├── LICENSE                # 许可证
@@ -441,6 +496,53 @@ const attachments = [];
 <summary><b>如何关闭自动回复？</b></summary>
 
 管理员登录后，在左侧 **系统设置** → **自动回复** 中，选择 **关闭** 并保存。
+
+</details>
+
+<details>
+<summary><b>怎么修改密码？其他设备会掉线吗？</b></summary>
+
+登录后点右上角的 **🔑 修改密码**，输入当前密码和新密码即可，管理员也一样。
+修改成功后，**其他设备上的登录会全部失效**，当前这台保持登录。
+
+</details>
+
+<details>
+<summary><b>登录提示「邮箱或密码错误」？</b></summary>
+
+出于安全考虑，「账号不存在」和「密码错误」返回的是同一句提示，无法据此判断某个邮箱有没有注册过。
+
+如果确认密码没错，先 **Ctrl + Shift + R 强制刷新**一次：旧版本的前端脚本可能还留在浏览器缓存里。
+
+</details>
+
+<details>
+<summary><b>垃圾邮件去哪了？</b></summary>
+
+被判为垃圾的邮件**不会直接丢弃**，而是隔离保存在 KV 的 `spam:<id>` 下（7 天后自动过期），
+既不会进任何人的收件箱，附件也不会写入 R2。需要排查时可以用 `npx wrangler kv key list` 查看。
+
+</details>
+
+<details>
+<summary><b>自动回复为什么没发出去？</b></summary>
+
+以下几种情况会**主动跳过**自动回复，避免给对方服务器造成回环或退信轰炸：
+
+- 邮件带 `Auto-Submitted` 头（说明它本身就是自动回复）
+- `Precedence` 是 `bulk` / `list` / `junk`
+- 发件人是本域（防止两台服务器互相回信）
+- 发件人是 `mailer-daemon` / `postmaster` / `noreply` 等无人值守地址
+
+另外还需要配置 `RESEND_API_KEY`，并在系统设置里开启自动回复。
+
+</details>
+
+<details>
+<summary><b>登录后控制台有 CSP 报错？</b></summary>
+
+如果站点挂在 Cloudflare 后面，边缘会自动往 HTML 里注入 Bot Management 和 Web Analytics 的脚本。
+默认的 CSP 已经放行这两者；若你手动收紧了 CSP，需要同时放行 `'unsafe-inline'` 与 `https://static.cloudflareinsights.com`。
 
 </details>
 

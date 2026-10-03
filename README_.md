@@ -281,24 +281,30 @@ npm -v     # 显示 10.x.x
 ```
 .
 ├── src/
-│   ├── index.ts           # Worker 主入口
+│   ├── index.ts           # Worker 主入口（HTTP 路由 + 内嵌前端脚本）
 │   ├── template.html      # 前端 HTML 模板
-│   ├── auth.ts            # 用户/会话管理
-│   ├── admin.ts           # 管理员设置
+│   ├── auth.ts            # 用户/会话管理 + 口令散列（PBKDF2）
+│   ├── admin.ts           # 管理员设置 + 注册码
 │   ├── attachment.ts      # 附件处理（R2 存储）
 │   ├── email-parser.ts    # 邮件解析 + 垃圾过滤
 │   ├── resend-client.ts   # Resend 发送封装
 │   ├── utils.ts           # SHA256 工具
 │   ├── types.ts           # 类型定义
-│   └── types.d.ts         # HTML 模块类型声明
-├── wrangler.toml          # Cloudflare 配置
+│   └── modules.d.ts       # HTML 模块类型声明
+├── wrangler.toml          # Cloudflare 配置（仓库里是占位符模板，需要自己填）
 ├── package.json           # 依赖管理
 ├── tsconfig.json          # TypeScript 配置
+├── .gitignore             # 忽略 node_modules / .wrangler / .dev.vars
+├── .gitattributes         # 统一换行符
 ├── README.md              # 主文档
 ├── README_.md             # 部署前准备文档（本文件）
 ├── LICENSE                # 许可证
 └── 部署.bat               # Windows 一键部署脚本
 ```
+
+> ⚠️ 仓库里的 `wrangler.toml` 是**占位符模板**，里面的域名和 KV 命名空间 id 都是示例值，
+> 需要按上面几步替换成你自己的再部署。两个敏感值（`RESEND_API_KEY`、`VAPID_PRIVATE_KEY`）
+> 不要写进文件，用 `npx wrangler secret put` 设置。
 
 ---
 
