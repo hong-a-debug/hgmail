@@ -6,6 +6,7 @@
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/hong-a-debug/hgmail)
 
+[![CI](https://github.com/hong-a-debug/hgmail/actions/workflows/ci.yml/badge.svg)](https://github.com/hong-a-debug/hgmail/actions/workflows/ci.yml)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-91.5%25-3178C6?logo=typescript&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
@@ -317,6 +318,9 @@ const attachments = [];
 | 会话凭证 | 服务端下发 `HttpOnly; Secure; SameSite=Lax` Cookie，前端 JS 读不到 |
 | 退出登录 | 同时销毁服务端会话并清除 Cookie，被复制过的凭证立即失效 |
 | 修改密码 | 校验当前密码后写入，并注销该用户在其他设备上的全部会话 |
+| 找回密码 | 一次性令牌（30 分钟、用后即失效），重置后踢掉该账号全部设备；申请接口不泄露账号是否存在，且同一邮箱 5 分钟只发一次 |
+| 登录设备 | 可查看并逐个踢出其他设备；接口返回的是会话 id 的短哈希而不是 id 本身，避免列表被读到即等于会话被接管 |
+| 注册确认 | 可选（管理员开关，默认关闭）：开启后新用户需点邮件里的确认链接才能登录；首个管理员与历史记录不受影响 |
 | 登录限速 | 同一 IP 15 分钟内失败 10 次后拒绝登录 |
 | 账号枚举 | 账号不存在与密码错误返回同一句提示 |
 
@@ -447,7 +451,9 @@ const attachments = [];
 ```
 .
 ├── src/
-│   ├── index.ts           # Worker 主入口（HTTP 路由 + 内嵌前端脚本）
+│   ├── index.ts           # Worker 主入口（HTTP 路由 + 邮件处理）
+│   ├── app.js             # 前端脚本（浏览器直接执行，不经过 TypeScript）
+│   ├── style.css          # 前端样式
 │   ├── template.html      # 前端 HTML 模板
 │   ├── auth.ts            # 用户/会话管理 + 口令散列（PBKDF2）
 │   ├── admin.ts           # 管理员设置 + 注册码
@@ -456,10 +462,15 @@ const attachments = [];
 │   ├── resend-client.ts   # Resend 发送封装
 │   ├── utils.ts           # SHA256 工具
 │   ├── types.ts           # 类型定义
-│   └── modules.d.ts       # HTML 模块类型声明
+│   └── modules.d.ts       # 文本模块（html/css/js）的类型声明
+├── scripts/
+│   └── check-frontend.mjs # 前端自检：语法 / DOM 契约 / 事件契约 / CSP / 版本号
+├── .github/workflows/
+│   └── ci.yml             # CI：tsc + 前端自检 + 试打包
 ├── wrangler.toml          # Cloudflare 配置（仓库里是占位符模板）
-├── package.json           # 依赖管理
+├── package.json           # 依赖管理与 check 脚本
 ├── tsconfig.json          # TypeScript 配置
+├── .npmrc                 # 打开 legacy-peer-deps（见下方说明）
 ├── .gitignore             # 忽略 node_modules / .wrangler / .dev.vars
 ├── .gitattributes         # 统一换行符
 ├── README.md              # 项目说明
@@ -467,6 +478,17 @@ const attachments = [];
 ├── LICENSE                # 许可证
 └── 部署.bat               # Windows 一键部署脚本
 ```
+
+### 关于依赖与构建
+
+- **`react` / `react-dom` 为什么在 devDependencies 里**：`resend` 依赖的 `@react-email/render`
+  会 import `react`、`react/jsx-runtime`、`react-dom/server`。本项目并不使用 React 邮件模板，
+  但打包器仍要能解析到它们，否则 `wrangler deploy` 会报 `Could not resolve "react"`。
+- **`.npmrc` 里的 `legacy-peer-deps`**：wrangler 把 `@cloudflare/workers-types` 声明为
+  peerOptional `^4`，而本项目用的是 v5，npm 7+ 默认会以 `ERESOLVE` 直接中止安装。
+  workers-types 只是类型包、运行时不参与打包，因此放开 peer 检查。
+- **本地跑检查**：`npm run check`（= `tsc --noEmit` + 前端自检），
+  `npm run check:build` 试打包。CI 会在每次 push 时跑同样的三步。
 
 ---
 
