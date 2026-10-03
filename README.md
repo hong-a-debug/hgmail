@@ -106,6 +106,10 @@ npm install
 npx wrangler deploy
 ```
 
+> 如果 `npm install` 报 `ERESOLVE ... @cloudflare/workers-types`，那是 wrangler 的
+> peerOptional 声明（`^4`）与本项目使用的 v5 冲突所致，加上 `--legacy-peer-deps`
+> 即可（仓库根目录的 `.npmrc` 已经默认开启）。
+
 ---
 
 ## 🎯 部署前准备

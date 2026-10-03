@@ -21,7 +21,10 @@ jobs:
           node-version: '20'
 
       - name: 安装依赖
-        run: npm install --no-audit --no-fund
+        # --legacy-peer-deps：wrangler 把 @cloudflare/workers-types 声明为 peerOptional ^4，
+        # 本项目用的是 v5，npm 7+ 默认会以 ERESOLVE 直接中止（已实际踩到）。
+        # 仓库根目录的 .npmrc 里也写了同样的开关，这里再显式带一次以免配置丢失。
+        run: npm install --no-audit --no-fund --legacy-peer-deps
 
       - name: TypeScript 类型检查
         run: npx tsc --noEmit
