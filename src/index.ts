@@ -1747,7 +1747,6 @@ const $ = id => document.getElementById(id);
 function isComposePlaceholder(html) {
     if (html === null || html === undefined) return true;
     const text = String(html)
-        .replace(/<br\s*\/?>/gi, '')
         .replace(/<[^>]*>/g, '')
         .replace(/&nbsp;/g, ' ')
         .trim();
