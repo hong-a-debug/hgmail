@@ -1,20 +1,28 @@
+# ⚠️ 这是提交到仓库的模板版本，所有值都是占位符。
+# 本机实际部署用的配置（真实域名与 KV 命名空间 id）只保存在本地，
+# 并用 `git update-index --skip-worktree wrangler.toml` 标记为不参与提交，
+# 因此本地改这里也不会被 git 记录，`wrangler deploy` 照常使用真实值。
+# 克隆本仓库后，把下面的占位符替换成你自己的值即可部署。
+
 name = "my-email-worker"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
 compatibility_flags = ["nodejs_compat"]
 
 [vars]
-DOMAIN = "hg-chat.win"
+DOMAIN = "example.com"
 ADMIN_ACCOUNT = "admin"
-VAPID_PUBLIC_KEY = "BFV6eb-eEGj3kPm6j7DxKNO9Vev7Cv6ZRUtJ9OFu4ZGv-u9LVirtG05x_TsVDVVAkCqB09jnJrdkaf2DMin4wOQ"
+# 用 `npx web-push generate-vapid-keys` 生成一对，这里填公钥；
+# 私钥不要写进文件，用 `npx wrangler secret put VAPID_PRIVATE_KEY` 设置。
+VAPID_PUBLIC_KEY = "你的 VAPID 公钥"
 
 [[kv_namespaces]]
 binding = "EMAIL"
-id = "81b0f153831548108fc5bfe552159d38"
+id = "你的 EMAIL 命名空间 id"
 
 [[kv_namespaces]]
 binding = "EMAIL_USER"
-id = "8a015fc1ca2d4f23ae3c0f3f0ddbefca"
+id = "你的 EMAIL_USER 命名空间 id"
 
 [[r2_buckets]]
 binding = "ATTACHMENTS"
