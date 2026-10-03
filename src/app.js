@@ -57,6 +57,13 @@ function replySubject(subject) {
     return /^re\s*:/i.test(s) ? s : 'Re: ' + s;
 }
 
+/** 转发主题：已带 Fwd:/Fw: 前缀不重复加 */
+function forwardSubject(subject) {
+    const s = String(subject == null ? '' : subject).trim();
+    if (!s || s === '(无主题)') return 'Fwd: (无主题)';
+    return /^fw?d?\s*:/i.test(s) ? s : 'Fwd: ' + s;
+}
+
 // ============================================================
 // 登录/注册切换
 // ============================================================
@@ -245,6 +252,9 @@ async function loadMainApp() {
                         if (adminData.settings.autoReply !== undefined) {
                             document.querySelector('input[name="autoReply"][value="' + (adminData.settings.autoReply ? 'on' : 'off') + '"]').checked = true;
                         }
+                        if (adminData.settings.sendExternal !== undefined) {
+                            document.querySelector('input[name="sendExternal"][value="' + (adminData.settings.sendExternal ? 'on' : 'off') + '"]').checked = true;
+                        }
                         if (adminData.settings.title) {
                             document.title = adminData.settings.title;
                             $('headerTitle').textContent = adminData.settings.title;
@@ -272,9 +282,10 @@ async function saveAdminSettings() {
     const title = $('adminTitle').value.trim();
     const senderPrefix = $('adminSenderPrefix').value.trim();
     const autoReply = document.querySelector('input[name="autoReply"]:checked').value === 'on';
+    const sendExternal = document.querySelector('input[name="sendExternal"]:checked').value === 'on';
 
     // 改密码不在这里：走独立的「修改密码」弹窗（/user/password）
-    const payload = { title, senderPrefix, autoReply };
+    const payload = { title, senderPrefix, autoReply, sendExternal };
 
     try {
         const resp = await fetch('/admin/settings', {
@@ -620,7 +631,8 @@ function closeView() {
     currentViewId = null;
 }
 
-async function replyFromView() {
+/** 回复或转发时打开写信弹窗。mode 为 'reply' 或 'forward' */
+async function openComposeFromMail(mode) {
     if (!currentViewId) return;
     if (!resendConfigured) { showToast('⚠️ 请先配置 Resend API Key', true); return; }
 
@@ -634,16 +646,32 @@ async function replyFromView() {
     }
     if (!mail || mail.from === undefined) { showToast('加载原邮件失败', true); return; }
 
+    const sourceId = currentViewId;
     closeView();
-    $('composeTo').value = mail.from || '';
-    $('composeSubject').value = replySubject(mail.subject);
+
+    // 转发要自己填收件人，回复则直接填原发件人
+    $('composeTo').value = mode === 'reply' ? (mail.from || '') : '';
+    $('composeSubject').value = mode === 'reply'
+        ? replySubject(mail.subject)
+        : forwardSubject(mail.subject);
+
     // 邮件正文一律先转义再插入：以前直接拼 innerHTML，
     // 发件人只要在纯文本正文里写 <img onerror=...> 就能在点「回复」时执行脚本。
-    const replyContent = '<br><br>--- 原始邮件 ---<br>' + textToHtml(mail.text || '');
-    $('composeHtml').value = replyContent;
-    $('composePreview').innerHTML = replyContent;
+    const header = mode === 'reply' ? '--- 原始邮件 ---' : '--- 转发的邮件 ---';
+    const quoted = '<br><br>' + header + '<br>'
+        + '发件人：' + textToHtml(mail.from || '') + '<br>'
+        + '时间：' + textToHtml(formatTime(mail.timestamp)) + '<br><br>'
+        + textToHtml(mail.text || '');
+    $('composeHtml').value = quoted;
+    $('composePreview').innerHTML = quoted;
+
+    // 记住来源，发送成功后回写状态（回复 → replied，转发 → forwarded）
+    composeContext = { id: sourceId, mode };
     $('composeModal').classList.add('active');
 }
+
+function replyFromView() { return openComposeFromMail('reply'); }
+function forwardFromView() { return openComposeFromMail('forward'); }
 
 async function deleteFromView() {
     if (!currentViewId) return;
@@ -666,6 +694,7 @@ function openCompose() {
     $('composeHtml').value = '';
     $('composePreview').innerHTML = '';
     attachments = [];
+    composeContext = null;   // 新写的邮件没有来源，发送后不需要回写状态
     renderAttachmentList();
     document.getElementById('composeAttachment').value = '';
     $('composeModal').classList.add('active');
@@ -677,6 +706,8 @@ function closeCompose() { $('composeModal').classList.remove('active'); }
 // 附件相关
 // ============================================================
 let attachments = [];
+// 当前这封正在写的邮件是从哪来的（回复/转发时记录，发送成功后回写状态）
+let composeContext = null;
 
 function addAttachments() {
     const input = document.getElementById('composeAttachment');
@@ -756,6 +787,23 @@ async function sendCompose() {
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || '发送失败');
         showToast('✅ 邮件已发送 (ID: ' + data.id + ')');
+
+        // 如果是回复/转发，把原邮件标记成对应状态（失败不影响已发送的结果）
+        if (composeContext) {
+            const target = composeContext.mode === 'forward' ? 'forwarded' : 'replied';
+            const sourceId = composeContext.id;
+            composeContext = null;
+            try {
+                await fetch('/mail/' + encodeURIComponent(sourceId) + '/status', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: target })
+                });
+            } catch (e) { /* ignore */ }
+        } else {
+            composeContext = null;
+        }
+
         attachments = [];
         renderAttachmentList();
         document.getElementById('composeAttachment').value = '';

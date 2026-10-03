@@ -16,14 +16,17 @@ export async function getAdminSettings(env: Env) {
     const title = await env.EMAIL_USER.get('admin:title') || '📧 邮件管理';
     const senderPrefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
     const autoReply = await env.EMAIL_USER.get('admin:auto_reply') !== 'false';
-    return { title, senderPrefix, autoReply };
+    // 默认允许站外发信，保持与旧版本一致；关掉后普通用户只能发给本域地址
+    const sendExternal = await env.EMAIL_USER.get('admin:send_external') !== 'false';
+    return { title, senderPrefix, autoReply, sendExternal };
 }
 
 export async function saveAdminSettings(
     env: Env,
     title?: string | null,
     senderPrefix?: string | null,
-    autoReply?: boolean | null
+    autoReply?: boolean | null,
+    sendExternal?: boolean | null
 ) {
     if (title !== undefined && title !== null) {
         await env.EMAIL_USER.put('admin:title', String(title).slice(0, 200));
@@ -33,6 +36,9 @@ export async function saveAdminSettings(
     }
     if (autoReply !== undefined && autoReply !== null) {
         await env.EMAIL_USER.put('admin:auto_reply', autoReply ? 'true' : 'false');
+    }
+    if (sendExternal !== undefined && sendExternal !== null) {
+        await env.EMAIL_USER.put('admin:send_external', sendExternal ? 'true' : 'false');
     }
 }
 

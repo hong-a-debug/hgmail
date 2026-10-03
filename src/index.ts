@@ -360,6 +360,40 @@ async function appendToIndex(
     }
 }
 
+/**
+ * 就地更新索引里某封邮件的状态。
+ * 只改状态字段，不重新读正文（索引里已经存了摘要）。
+ */
+async function updateIndexStatus(env: Env, mail: StoredEmail): Promise<void> {
+    const targets: [KVNamespace, string][] = [[env.EMAIL, '_mail_ids']];
+    const owners = new Set<string>();
+    const primary = normalizeEmail(mail.to);
+    if (primary) owners.add(primary);
+    for (const r of mail.recipients || []) {
+        const e = normalizeEmail(r);
+        if (e) owners.add(e);
+    }
+    for (const owner of owners) targets.push([env.EMAIL_USER, `user:${owner}:list`]);
+
+    for (const [kv, key] of targets) {
+        const list = await readIndex(env, kv, key);
+        let changed = false;
+        for (const entry of list) {
+            if (entry.id === mail.id && entry.status !== mail.status) {
+                entry.status = mail.status;
+                changed = true;
+            }
+        }
+        if (changed) {
+            try {
+                await kv.put(key, JSON.stringify(list));
+            } catch (e) {
+                console.error(`更新索引状态失败: ${key}`, e);
+            }
+        }
+    }
+}
+
 /** 自动回复前的回环 / backscatter 防护 */
 function shouldSkipAutoReply(
     message: any,
@@ -640,6 +674,7 @@ const worker = {
                     senderPrefix: settings.senderPrefix || 'noreply',
                     regCode: regCodePlain || '暂无注册码',
                     autoReply: settings.autoReply !== undefined ? settings.autoReply : true,
+                    sendExternal: settings.sendExternal !== undefined ? settings.sendExternal : true,
                 },
             });
         }
@@ -671,21 +706,32 @@ const worker = {
 
                 const hasAdminUser = await env.EMAIL_USER.get('_admin_exists') === 'true';
 
+                let role: 'admin' | 'user' = 'user';
+
                 if (hasAdminUser) {
                     if (!regCode) return Response.json({ success: false, error: '请输入注册码' }, { status: 400 });
                     if (!await verifyRegCode(env, regCode)) {
                         return Response.json({ success: false, error: '注册码错误' }, { status: 400 });
                     }
+                } else {
+                    // 首次注册即管理员。KV 没有原子的 compare-and-swap，
+                    // 这里用一个令牌锁把并发窗口收敛：双方都写自己的令牌，
+                    // 只有读回来仍然是自己令牌的那个才算抢到，另一个直接失败重试。
+                    const token = crypto.randomUUID();
+                    await env.EMAIL_USER.put('_admin_lock', token);
+                    if (await env.EMAIL_USER.get('_admin_lock') !== token) {
+                        return Response.json({ success: false, error: '系统正在初始化，请稍后重试' }, { status: 409 });
+                    }
+                    role = 'admin';
                 }
 
                 if (await userExists(env, email)) {
                     return Response.json({ success: false, error: '该邮箱已注册' }, { status: 400 });
                 }
 
-                const role = hasAdminUser ? 'user' : 'admin';
                 await createUser(env, email, await hashPassword(password), role);
 
-                if (!hasAdminUser) {
+                if (role === 'admin') {
                     await setAdminExists(env, true);
                     await generateRegCode(env);
                 }
@@ -828,10 +874,10 @@ const worker = {
                 if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
                 if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
 
-                const body = await request.json() as { title?: string; senderPrefix?: string; autoReply?: boolean };
+                const body = await request.json() as { title?: string; senderPrefix?: string; autoReply?: boolean; sendExternal?: boolean };
                 // 口令不再从这里改：改密码统一走 /user/password（校验当前密码后写 user:<email> 记录）。
                 // 旧代码把散列写进 admin:password_hash，而登录从不读这个 key，等于改了个寂寞。
-                await saveAdminSettings(env, body.title, body.senderPrefix, body.autoReply);
+                await saveAdminSettings(env, body.title, body.senderPrefix, body.autoReply, body.sendExternal);
                 return Response.json({ success: true });
             } catch (error) {
                 console.error('保存设置失败:', error);
@@ -1053,6 +1099,37 @@ const worker = {
         }
 
         // ============================================================
+        // 标记邮件状态（回复 / 转发后由前端调用）
+        // ============================================================
+        if (path.split('/')[3] === 'status' && path.startsWith('/mail/') && request.method === 'POST') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ error: '未登录' }, { status: 401 });
+
+            const id = safeDecode(path.split('/')[2] || '');
+            if (!id) return Response.json({ error: '缺少邮件 ID' }, { status: 400 });
+
+            const data = await env.EMAIL.get(id);
+            if (!data) return Response.json({ error: '邮件不存在' }, { status: 404 });
+            const mail = safeJsonParse<StoredEmail | null>(data, null);
+            if (!mail) return Response.json({ error: '邮件数据损坏' }, { status: 500 });
+            if (session.role !== 'admin' && !canAccessMail(session, mail)) {
+                return Response.json({ error: '无权操作' }, { status: 403 });
+            }
+
+            const body = await request.json().catch(() => ({})) as { status?: string };
+            const status = String(body.status || '');
+            const allowed: StoredEmail['status'][] = ['received', 'replied', 'forwarded', 'read'];
+            if (!allowed.includes(status as StoredEmail['status'])) {
+                return Response.json({ error: '状态不合法' }, { status: 400 });
+            }
+
+            mail.status = status as StoredEmail['status'];
+            await env.EMAIL.put(id, JSON.stringify(mail), { expirationTtl: MAIL_TTL_SECONDS });
+            await updateIndexStatus(env, mail);
+            return Response.json({ success: true, status });
+        }
+
+        // ============================================================
         // 发送邮件（含附件）
         // ============================================================
         if (path === '/send' && request.method === 'POST') {
@@ -1095,6 +1172,22 @@ const worker = {
                 const text = String(body.text || '');
                 if (!html.trim() && !text.trim()) {
                     return Response.json({ success: false, error: '邮件内容不能为空' }, { status: 400 });
+                }
+
+                // 站外发信开关：关闭后普通用户只能发给本域地址，管理员不受限。
+                // 默认开启（保持原有行为），管理员可在系统设置里关掉。
+                if (session.role !== 'admin') {
+                    const allowExternal = await env.EMAIL_USER.get('admin:send_external') !== 'false';
+                    if (!allowExternal) {
+                        const domain = normalizeEmail(env.DOMAIN);
+                        const outside = toList.filter(a => (a.split('@')[1] || '') !== domain);
+                        if (outside.length > 0) {
+                            return Response.json(
+                                { success: false, error: `当前不允许向站外地址发信：${outside.join(', ')}` },
+                                { status: 403 }
+                            );
+                        }
+                    }
                 }
 
                 // 每个用户每天发信上限，避免账号被拿来做发信跳板
