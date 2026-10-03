@@ -418,25 +418,40 @@ function updateSendButtonVisibility() {
 // ============================================================
 let mails = [];
 let mailTotal = 0;
+let mailPage = 1;
+let mailPageSize = 20;
+let mailPageCount = 1;
+let mailQuery = '';
 let currentViewId = null;
 const mailListEl = $('mailList');
 
 async function loadMails() {
     try {
-        const resp = await fetch('/mails');
+        const params = new URLSearchParams({
+            page: String(mailPage),
+            pageSize: String(mailPageSize),
+        });
+        if (mailQuery) params.set('q', mailQuery);
+
+        const resp = await fetch('/mails?' + params.toString());
         if (!resp.ok) throw new Error('加载失败');
         const data = await resp.json();
-        // 服务端现在只返回摘要（正文按需从 /mail/:id 取）
+        // 服务端返回的是摘要（正文按需从 /mail/:id 取）
         mails = data.mails || [];
         mailTotal = typeof data.total === 'number' ? data.total : mails.length;
+        mailPage = typeof data.page === 'number' ? data.page : 1;
+        mailPageCount = typeof data.pageCount === 'number' ? data.pageCount : 1;
         renderMails();
         updateStats();
+        updatePager();
     } catch (e) { showToast('加载邮件失败: ' + e.message, true); }
 }
 
 function renderMails() {
     if (mails.length === 0) {
-        mailListEl.innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>收件箱空空如也</p></div>';
+        mailListEl.innerHTML = '<div class="empty-state"><div class="icon">📭</div><p>'
+            + (mailQuery ? '没有匹配「' + escapeHtml(mailQuery) + '」的邮件' : '收件箱空空如也')
+            + '</p></div>';
         return;
     }
     var html = '';
@@ -454,6 +469,7 @@ function renderMails() {
         html += '  <div class="info">';
         html += '    <div class="from">' + from + '</div>';
         html += '    <div class="subject">' + subject + clip + '</div>';
+        if (m.snippet) html += '    <div class="snippet">' + escapeHtml(m.snippet) + '</div>';
         html += '    <div class="time">' + time + '</div>';
         html += '  </div>';
         html += '  <span class="status-badge ' + badge + '">' + badgeText + '</span>';
@@ -463,9 +479,50 @@ function renderMails() {
 }
 
 function updateStats() {
-    // 总数用服务端索引长度，之前显示的是"当前加载的最近 50 封"，有误导
+    // 总数是服务端按当前搜索条件统计的结果，不是"当前页这几封"
     $('totalCount').textContent = mailTotal;
     $('repliedCount').textContent = mails.filter(m => m.status === 'replied').length;
+}
+
+function updatePager() {
+    const info = $('pageInfo');
+    if (info) {
+        info.textContent = mailPageCount > 0
+            ? `第 ${mailPage} / ${mailPageCount} 页`
+            : '';
+    }
+    const prev = document.querySelector('[data-action="prevPage"]');
+    const next = document.querySelector('[data-action="nextPage"]');
+    if (prev) prev.disabled = mailPage <= 1;
+    if (next) next.disabled = mailPage >= mailPageCount;
+}
+
+function runSearch() {
+    const input = $('mailSearch');
+    mailQuery = input ? input.value.trim() : '';
+    mailPage = 1;
+    if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = setInterval(loadMails, 30000); }
+    loadMails();
+}
+
+function clearSearch() {
+    const input = $('mailSearch');
+    if (input) input.value = '';
+    mailQuery = '';
+    mailPage = 1;
+    loadMails();
+}
+
+function prevPage() {
+    if (mailPage <= 1) return;
+    mailPage -= 1;
+    loadMails();
+}
+
+function nextPage() {
+    if (mailPage >= mailPageCount) return;
+    mailPage += 1;
+    loadMails();
 }
 
 function escapeHtml(str) {
@@ -883,6 +940,13 @@ document.addEventListener('click', function(e) {
 document.addEventListener('DOMContentLoaded', function() {
     init();
     setupEditorSync();
+    // 搜索框回车即搜索（页面级的 Enter 处理只管登录/注册页，不会冲突）
+    const search = $('mailSearch');
+    if (search) {
+        search.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); runSearch(); }
+        });
+    }
 });
 
 document.addEventListener('keydown', function(e) {

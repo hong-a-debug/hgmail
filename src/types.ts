@@ -24,6 +24,23 @@ export interface AttachmentInfo {
     content_id?: string;
 }
 
+/**
+ * 邮件索引项。
+ *
+ * 索引里直接存摘要（而不是只存 id），列表、搜索、分页都只靠一次 KV 读取完成。
+ * 旧版本索引里是一个个邮件 id，读取时会自动升级成这个结构。
+ */
+export interface MailIndexEntry {
+    id: string;
+    from: string;
+    to: string;
+    subject: string;
+    timestamp: string;
+    status: string;
+    attachmentCount: number;
+    snippet: string;
+}
+
 export interface User {
     email: string;
     password_hash: string;

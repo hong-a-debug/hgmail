@@ -400,7 +400,7 @@ const attachments = [];
 | `/no-login/info` | GET | 未登录用户获取标题 | 任何人 |
 | `/user/info` | GET | 已登录用户获取信息 | 已登录 |
 | `/admin/info` | GET | 管理员获取完整设置 | 管理员 |
-| `/mails` | GET | 邮件列表 | 已登录 |
+| `/mails` | GET | 邮件列表，支持 `?q=` 搜索、`?page=` `?pageSize=` 分页 | 已登录 |
 | `/mail/:id` | GET | 邮件详情 | 已登录 |
 | `/mail/:id` | DELETE | 删除邮件 | 已登录 |
 | `/send` | POST | 发送邮件（html 与 text 至少一样） | 已登录 |

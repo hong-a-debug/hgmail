@@ -19,7 +19,7 @@
     <link rel="manifest" href="/manifest.json" />
 
     <!-- ===== 样式 ===== -->
-    <link rel="stylesheet" href="/style.css?v=4" />
+    <link rel="stylesheet" href="/style.css?v=5" />
 </head>
 <body>
 
@@ -120,7 +120,7 @@
             <h2>📊 统计</h2>
             <div class="stats">
                 <div class="stat-item"><div class="num" id="totalCount">0</div><div class="label">总邮件</div></div>
-                <div class="stat-item"><div class="num" id="repliedCount">0</div><div class="label">已回复</div></div>
+                <div class="stat-item"><div class="num" id="repliedCount">0</div><div class="label">本页已回复</div></div>
             </div>
             <div style="margin-top:16px;padding-top:16px;border-top:1px solid #eee;">
                 <p style="font-size:13px;color:#999;line-height:1.6;">💡 点击邮件查看详情<br/>🔄 自动刷新每 30 秒</p>
@@ -130,9 +130,19 @@
         <div class="mail-list">
             <div class="mail-list-header">
                 <h2>📥 收件箱</h2>
-                <button class="refresh-btn" data-action="loadMails" title="刷新">⟳</button>
+                <div class="mail-tools">
+                    <input id="mailSearch" type="search" placeholder="搜索主题 / 发件人 / 内容" />
+                    <button class="refresh-btn" data-action="runSearch" title="搜索">🔍</button>
+                    <button class="refresh-btn" data-action="clearSearch" title="清除搜索">✕</button>
+                    <button class="refresh-btn" data-action="loadMails" title="刷新">⟳</button>
+                </div>
             </div>
             <div id="mailList"><div class="empty-state"><div class="icon">📭</div><p>暂无邮件</p></div></div>
+            <div class="mail-pager">
+                <button class="page-btn" data-action="prevPage">← 上一页</button>
+                <span id="pageInfo"></span>
+                <button class="page-btn" data-action="nextPage">下一页 →</button>
+            </div>
         </div>
     </div>
 </div>
@@ -205,6 +215,6 @@
 <!-- 带版本号：浏览器里可能还留着旧的 no-cache 之前的 app.js 缓存，
      换 URL 可以直接绕开，避免「旧前端 + 新后端」导致登录失败。
      以后改动 app.js 只要把这个 v= 的值加一即可。 -->
-<script src="/app.js?v=4"></script>
+<script src="/app.js?v=5"></script>
 </body>
 </html>

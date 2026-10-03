@@ -98,6 +98,48 @@ header .badge.clickable:hover { background: rgba(255,255,255,0.3); }
     transition: background 0.15s;
 }
 .refresh-btn:hover { background: #f0f2ff; }
+
+/* ===== 搜索与分页 ===== */
+.mail-tools { display: flex; align-items: center; gap: 4px; }
+.mail-tools input[type="search"] {
+    width: 200px;
+    padding: 6px 10px;
+    border: 1px solid #e2e6ef;
+    border-radius: 8px;
+    font-size: 13px;
+    outline: none;
+}
+.mail-tools input[type="search"]:focus { border-color: #667eea; }
+.mail-pager {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 12px 20px;
+    border-top: 1px solid #f0f2f5;
+    font-size: 13px;
+    color: #666;
+}
+.page-btn {
+    background: #f4f6fb;
+    border: 1px solid #e2e6ef;
+    color: #4a5568;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.page-btn:hover:not(:disabled) { background: #e8ecf8; }
+.page-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.mail-item .info .snippet {
+    font-size: 12px;
+    color: #9aa3b2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
 .mail-item {
     padding: 16px 20px;
     border-bottom: 1px solid #f5f5f5;

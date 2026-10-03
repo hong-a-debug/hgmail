@@ -1,4 +1,4 @@
-import { Env, StoredEmail } from './types';
+import { Env, StoredEmail, MailIndexEntry } from './types';
 import { parseEmail } from './email-parser';
 import { sendAutoReply, sendEmail } from './resend-client';
 import { saveAttachments, getAttachment, deleteAttachments } from './attachment';
@@ -36,8 +36,9 @@ const HTML_TEMPLATE = template;
 const MAIL_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 天
 // 列表索引最多保留多少封
 const MAX_INDEXED_MAILS = 500;
-// 列表接口一次返回多少封（只返回摘要，正文走 /mail/:id）
-const MAIL_LIST_LIMIT = 50;
+// 列表接口每页多少封（只返回摘要，正文走 /mail/:id）
+const MAIL_LIST_DEFAULT_PAGE_SIZE = 20;
+const MAIL_LIST_MAX_PAGE_SIZE = 50;
 
 // 安全响应头（所有 HTML / JS / JSON 响应统一附加）
 const SECURITY_HEADERS: Record<string, string> = {
@@ -164,7 +165,7 @@ function canAccessMail(session: { email: string; role: string }, mail: StoredEma
 }
 
 /** 列表接口用的邮件摘要（不含正文，避免一次返回几十封完整 HTML） */
-function mailSummary(mail: StoredEmail) {
+function mailSummary(mail: StoredEmail): MailIndexEntry {
     return {
         id: mail.id,
         from: mail.from,
@@ -175,6 +176,58 @@ function mailSummary(mail: StoredEmail) {
         attachmentCount: Array.isArray(mail.attachments) ? mail.attachments.length : 0,
         snippet: String(mail.text || '').replace(/\s+/g, ' ').trim().slice(0, 120),
     };
+}
+
+function isIndexEntry(x: unknown): x is MailIndexEntry {
+    return !!x && typeof x === 'object' && typeof (x as MailIndexEntry).id === 'string';
+}
+
+/**
+ * 把索引里的内容统一成摘要数组。
+ *
+ * 旧版本索引只存邮件 id，这里顺手读一次正文补成摘要。读不到的（邮件已被删除或过期）
+ * 会自然掉出索引，相当于一次顺带清理。
+ * 索引本身有上限（≤500 条），所以这次升级只发生一次。
+ */
+async function normalizeIndexList(env: Env, raw: unknown): Promise<MailIndexEntry[]> {
+    if (!Array.isArray(raw)) return [];
+    const entries: MailIndexEntry[] = [];
+    const legacyIds: string[] = [];
+    for (const item of raw) {
+        if (isIndexEntry(item)) entries.push(item);
+        else if (typeof item === 'string' && item) legacyIds.push(item);
+    }
+    if (legacyIds.length > 0) {
+        const resolved = await Promise.all(legacyIds.map(async (id) => {
+            const data = await env.EMAIL.get(id);
+            const mail = data ? safeJsonParse<StoredEmail | null>(data, null) : null;
+            return mail ? mailSummary(mail) : null;
+        }));
+        for (const entry of resolved) if (entry) entries.push(entry);
+    }
+    // 按时间升序，与「新邮件追加在尾部」的写入顺序保持一致
+    entries.sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)));
+    return entries;
+}
+
+/**
+ * 读取索引。只有在检测到旧格式并完成升级时才写回，
+ * 避免每次打开列表都产生一次 KV 写（同一 key 每秒只允许写一次）。
+ */
+async function readIndex(env: Env, kv: KVNamespace, key: string): Promise<MailIndexEntry[]> {
+    const raw = await kv.get(key);
+    const parsed = safeJsonParse<unknown>(raw, []);
+    const hadLegacy = Array.isArray(parsed) && parsed.some((x) => typeof x === 'string');
+    const entries = await normalizeIndexList(env, parsed);
+    if (hadLegacy && entries.length > 0) {
+        try {
+            await kv.put(key, JSON.stringify(entries));
+            console.log(`索引已从 id 列表升级为摘要: ${key}（${entries.length} 条）`);
+        } catch (e) {
+            console.error(`索引升级写回失败: ${key}`, e);
+        }
+    }
+    return entries;
 }
 
 /**
@@ -259,7 +312,7 @@ function normalizeRecipients(envelopeTo: unknown, headerRecipients?: string[] | 
 }
 
 /**
- * 把一个邮件 ID 追加进索引数组。
+ * 把一封邮件的摘要追加进索引。
  * KV 对同一个 key 有「每秒 1 次写」的限制，突发收信时会 429，
  * 以前这个异常会被外层 catch 吞掉 —— 邮件正文已入库但索引没写，邮件在列表里永久消失。
  */
@@ -267,26 +320,25 @@ async function appendToIndex(
     env: Env,
     kv: KVNamespace,
     key: string,
-    id: string,
+    entry: MailIndexEntry,
     max: number
 ): Promise<void> {
-    let stale: string[] = [];
+    let stale: MailIndexEntry[] = [];
     for (let attempt = 1; attempt <= 4; attempt++) {
         try {
             const raw = await kv.get(key);
-            let ids = safeJsonParse<string[]>(raw, []);
-            if (!Array.isArray(ids)) ids = [];
-            ids = ids.filter(x => typeof x === 'string' && x);
-            if (!ids.includes(id)) ids.push(id);
-            if (ids.length > max) {
-                stale = ids.slice(0, ids.length - max);
-                ids = ids.slice(-max);
+            const existing = await normalizeIndexList(env, safeJsonParse<unknown>(raw, []));
+            const merged = existing.filter(x => x.id !== entry.id);
+            merged.push(entry);
+            if (merged.length > max) {
+                stale = merged.slice(0, merged.length - max);
+                merged.splice(0, merged.length - max);
             }
-            await kv.put(key, JSON.stringify(ids));
+            await kv.put(key, JSON.stringify(merged));
             break;
         } catch (e) {
             if (attempt === 4) {
-                console.error(`❌ 索引写入最终失败，邮件 ${id} 可能不出现在列表里: ${key}`, e);
+                console.error(`❌ 索引写入最终失败，邮件 ${entry.id} 可能不出现在列表里: ${key}`, e);
                 return;
             }
             console.warn(`索引写入失败(${key})，第 ${attempt} 次重试:`, e);
@@ -296,13 +348,13 @@ async function appendToIndex(
 
     // 只有全局索引被淘汰时才删数据，且要连 R2 附件一起删（否则附件永远留着）
     if (stale.length > 0 && key === '_mail_ids') {
-        for (const oldId of stale) {
+        for (const old of stale) {
             try {
-                const data = await env.EMAIL.get(oldId);
-                if (data) await deleteAttachments(env, oldId);
-                await env.EMAIL.delete(oldId);
+                const data = await env.EMAIL.get(old.id);
+                if (data) await deleteAttachments(env, old.id);
+                await env.EMAIL.delete(old.id);
             } catch (e) {
-                console.error(`清理过期邮件失败: ${oldId}`, e);
+                console.error(`清理过期邮件失败: ${old.id}`, e);
             }
         }
     }
@@ -454,11 +506,12 @@ const worker = {
             await env.EMAIL.put(messageId, JSON.stringify(emailData), { expirationTtl: MAIL_TTL_SECONDS });
 
             // 全局邮件索引（带退避重试 / 淘汰清理）
-            await appendToIndex(env, env.EMAIL, '_mail_ids', messageId, MAX_INDEXED_MAILS);
+            const summary = mailSummary(emailData);
+            await appendToIndex(env, env.EMAIL, '_mail_ids', summary, MAX_INDEXED_MAILS);
 
             // 用户邮件列表
             for (const recipient of recipients) {
-                await appendToIndex(env, env.EMAIL_USER, `user:${recipient}:list`, messageId, MAX_INDEXED_MAILS);
+                await appendToIndex(env, env.EMAIL_USER, `user:${recipient}:list`, summary, MAX_INDEXED_MAILS);
             }
 
             // 推送通知
@@ -892,26 +945,33 @@ const worker = {
             const session = await getSessionFromCookie();
             if (!session) return Response.json({ error: '未登录' }, { status: 401 });
 
-            let ids: string[] = [];
-            if (session.role === 'admin') {
-                ids = safeJsonParse<string[]>(await env.EMAIL.get('_mail_ids'), []);
-            } else {
-                const userListKey = `user:${normalizeEmail(session.email)}:list`;
-                ids = safeJsonParse<string[]>(await env.EMAIL_USER.get(userListKey), []);
-            }
-            if (!Array.isArray(ids)) ids = [];
+            const isAdmin = session.role === 'admin';
+            const indexKey = isAdmin ? '_mail_ids' : `user:${normalizeEmail(session.email)}:list`;
+            const indexKv = isAdmin ? env.EMAIL : env.EMAIL_USER;
+            const all = await readIndex(env, indexKv, indexKey);
 
-            const total = ids.length;
-            const recentIds = ids.slice(-MAIL_LIST_LIMIT).reverse();
-            const mails: ReturnType<typeof mailSummary>[] = [];
-            for (const id of recentIds) {
-                if (!id) continue;
-                const data = await env.EMAIL.get(id);
-                if (!data) continue;
-                const mail = safeJsonParse<StoredEmail | null>(data, null);
-                if (mail) mails.push(mailSummary(mail));
-            }
-            return Response.json({ mails, total });
+            // 搜索：主题 / 发件人 / 收件人 / 正文摘要，大小写不敏感
+            const query = (url.searchParams.get('q') || '').trim();
+            const needle = query.toLowerCase();
+            const matched = needle
+                ? all.filter(e => [e.subject, e.from, e.to, e.snippet]
+                    .some(v => String(v || '').toLowerCase().includes(needle)))
+                : all;
+
+            // 索引是按时间升序追加的，列表要新的在前
+            const ordered = matched.slice().reverse();
+            const total = ordered.length;
+
+            const pageSize = Math.min(
+                Math.max(parseInt(url.searchParams.get('pageSize') || String(MAIL_LIST_DEFAULT_PAGE_SIZE), 10) || MAIL_LIST_DEFAULT_PAGE_SIZE, 1),
+                MAIL_LIST_MAX_PAGE_SIZE
+            );
+            const pageCount = Math.max(1, Math.ceil(total / pageSize));
+            const page = Math.min(Math.max(parseInt(url.searchParams.get('page') || '1', 10) || 1, 1), pageCount);
+            const start = (page - 1) * pageSize;
+            const mails = ordered.slice(start, start + pageSize);
+
+            return Response.json({ mails, total, page, pageSize, pageCount, query });
         }
 
         // ============================================================
@@ -963,12 +1023,12 @@ const worker = {
                 await deleteAttachments(env, id);
             }
 
-            const allIds = safeJsonParse<string[]>(await env.EMAIL.get('_mail_ids'), []);
-            const nextIds = Array.isArray(allIds) ? allIds.filter(i => i !== id) : [];
-            await env.EMAIL.put('_mail_ids', JSON.stringify(nextIds));
+            const all = await readIndex(env, env.EMAIL, '_mail_ids');
+            const nextAll = all.filter(e => e.id !== id);
+            await env.EMAIL.put('_mail_ids', JSON.stringify(nextAll));
 
             // 以前只在非管理员删除时清理「当前用户」一个列表，
-            // 管理员删除或多人收件时其他用户的列表会残留死 ID。
+            // 管理员删除或多人收件时其他用户的列表会残留死条目。
             const owners = new Set<string>();
             const primary = normalizeEmail(mail.to);
             if (primary) owners.add(primary);
@@ -978,10 +1038,8 @@ const worker = {
             }
             for (const owner of owners) {
                 const userListKey = `user:${owner}:list`;
-                const raw = await env.EMAIL_USER.get(userListKey);
-                const list = safeJsonParse<string[]>(raw, []);
-                if (!Array.isArray(list)) continue;
-                const next = list.filter(i => i !== id);
+                const list = await readIndex(env, env.EMAIL_USER, userListKey);
+                const next = list.filter(e => e.id !== id);
                 if (next.length !== list.length) {
                     try {
                         await env.EMAIL_USER.put(userListKey, JSON.stringify(next));
