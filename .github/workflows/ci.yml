@@ -1,0 +1,33 @@
+name: CI
+
+# 这套检查的意义：src/app.js 与 src/style.css 不经过 TypeScript 编译，
+# 改坏了不会在本地有任何提示（曾经就因此往线上推过一次语法错误，
+# 整个前端直接白屏）。这里把它变成提交即拦截。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 安装依赖
+        run: npm install --no-audit --no-fund
+
+      - name: TypeScript 类型检查
+        run: npx tsc --noEmit
+
+      - name: 前端资源自检（语法 / DOM 契约 / 事件契约 / CSP / 版本号 / 打包规则）
+        run: node scripts/check-frontend.mjs
+
+      - name: 试打包（确认 wrangler 能把前端资源当文本模块打进 Worker）
+        run: npx wrangler deploy --dry-run --outdir=dist

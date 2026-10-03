@@ -4,7 +4,10 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "deploy:no-bundle": "wrangler deploy --no-bundle"
+    "deploy:no-bundle": "wrangler deploy --no-bundle",
+    "check": "tsc --noEmit && node scripts/check-frontend.mjs",
+    "check:frontend": "node scripts/check-frontend.mjs",
+    "check:build": "wrangler deploy --dry-run --outdir=dist"
   },
   "dependencies": {
     "postal-mime": "^2.0.0",
