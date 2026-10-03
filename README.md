@@ -2,13 +2,15 @@
 
 # 📧 邮件系统
 
-**基于 Cloudflare 全家桶搭建的全功能邮件系统**
+**基于 Cloudflare Workers / KV / R2 / Email Routing 搭建的全功能邮件系统**
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/hong-a-debug/hgmail)
 
 [![CI](https://github.com/hong-a-debug/hgmail/actions/workflows/ci.yml/badge.svg)](https://github.com/hong-a-debug/hgmail/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/hong-a-debug/hgmail?label=release&color=success)](https://github.com/hong-a-debug/hgmail/releases/latest)
 ![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-91.5%25-3178C6?logo=typescript&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-62%25-3178C6?logo=typescript&logoColor=white)
+![JavaScript](https://img.shields.io/badge/JavaScript-23%25-F7DF1E?logo=javascript&logoColor=black)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 ![PWA](https://img.shields.io/badge/PWA-Supported-5A0FC8?logo=pwa&logoColor=white)
 
@@ -17,6 +19,9 @@
 ---
 
 ## ✨ 功能特性
+
+> 当前版本 **[v2.1.0](https://github.com/hong-a-debug/hgmail/releases/latest)**。
+> 每个版本的完整变更记录见 [Releases](https://github.com/hong-a-debug/hgmail/releases)。
 
 <table>
 <tr>
