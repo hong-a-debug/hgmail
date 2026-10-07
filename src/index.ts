@@ -397,6 +397,49 @@ async function updateIndexStatus(env: Env, mail: StoredEmail): Promise<void> {
     }
 }
 
+/**
+ * 取某个用户的邮件列表键。
+ *
+ * 老版本是拿收件人地址原样拼键的（可能带大写），新版一律小写。
+ * 如果小写键还不存在，就去找同地址的其它大小写写法并迁移过来，
+ * 否则老用户升级后会以为自己的历史邮件全没了。
+ */
+async function resolveUserListKey(env: Env, email: string): Promise<string> {
+    const normalized = normalizeEmail(email);
+    const primary = `user:${normalized}:list`;
+
+    let legacyKeys: string[] = [];
+    try {
+        // 只在主键缺失时才扫一遍，避免每打开一次列表就多一次 list 调用
+        const current = await env.EMAIL_USER.get(primary);
+        if (!current) {
+            const listed = await env.EMAIL_USER.list({ prefix: 'user:', limit: 1000 });
+            for (const entry of listed.keys) {
+                if (!entry.name.endsWith(':list')) continue;
+                const stored = entry.name.slice('user:'.length, -':list'.length);
+                if (normalizeEmail(stored) === normalized) legacyKeys.push(entry.name);
+            }
+        }
+    } catch (e) {
+        console.error('查找老邮件列表键失败:', e);
+    }
+
+    for (const legacyKey of legacyKeys) {
+        try {
+            const legacy = await env.EMAIL_USER.get(legacyKey);
+            if (legacy) {
+                await env.EMAIL_USER.put(primary, legacy);
+                console.log(`老邮件列表键已迁移: ${legacyKey} -> ${primary}`);
+            }
+            await env.EMAIL_USER.delete(legacyKey);
+        } catch (e) {
+            console.error(`迁移邮件列表键失败: ${legacyKey}`, e);
+        }
+    }
+
+    return primary;
+}
+
 /** 自动回复前的回环 / backscatter 防护 */
 function shouldSkipAutoReply(
     message: any,
@@ -1157,7 +1200,9 @@ const worker = {
             if (!session) return Response.json({ error: '未登录' }, { status: 401 });
 
             const isAdmin = session.role === 'admin';
-            const indexKey = isAdmin ? '_mail_ids' : `user:${normalizeEmail(session.email)}:list`;
+            const indexKey = isAdmin
+                ? '_mail_ids'
+                : await resolveUserListKey(env, session.email);
             const indexKv = isAdmin ? env.EMAIL : env.EMAIL_USER;
             const all = await readIndex(env, indexKv, indexKey);
 
@@ -1644,7 +1689,16 @@ self.addEventListener('notificationclick', function(event) {
             });
         }
 
-        return Response.json({ error: '未找到该路由' }, { status: 404 });
+        return new Response(`<html>
+<head><title>404 Not Found</title></head>
+<body>
+<center><h1>404 Not Found</h1></center>
+<hr><center>hg-chat.win</center>
+</body>
+</html>`, {
+	status: 404,
+	headers: { 'Content-Type': 'text/html; charset=utf-8' }
+});
     },
 };
 

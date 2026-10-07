@@ -107,13 +107,44 @@ export async function getUser(env: Env, email: string): Promise<User | null> {
     const key = normalizeEmail(email);
     if (!key) return null;
     const data = await env.EMAIL_USER.get(`user:${key}`);
-    if (!data) return null;
-    try {
-        return JSON.parse(data) as User;
-    } catch (e) {
-        console.error(`用户记录损坏: ${key}`, e);
-        return null;
+    if (data) {
+        try {
+            return JSON.parse(data) as User;
+        } catch (e) {
+            console.error(`用户记录损坏: ${key}`, e);
+            return null;
+        }
     }
+    // 兜底：老记录的键是注册时原样写入的（可能含大写），而新版一律按小写查找。
+    // 不做这一步的话，用大写邮箱注册过的老用户会在升级后直接登录不上。
+    return await migrateLegacyUserKey(env, key);
+}
+
+/**
+ * 大小写不敏感地找出老用户记录，并把它迁移到小写键上。
+ * 只在按小写键查不到时才会走到这里，所以对正常数据没有额外开销。
+ */
+async function migrateLegacyUserKey(env: Env, normalized: string): Promise<User | null> {
+    try {
+        const listed = await env.EMAIL_USER.list({ prefix: 'user:', limit: 1000 });
+        for (const entry of listed.keys) {
+            if (entry.name.endsWith(':list')) continue;
+            const storedEmail = entry.name.slice('user:'.length);
+            if (normalizeEmail(storedEmail) !== normalized) continue;
+
+            const data = await env.EMAIL_USER.get(entry.name);
+            if (!data) continue;
+            const user = JSON.parse(data) as User;
+            user.email = normalized;
+            await env.EMAIL_USER.put(`user:${normalized}`, JSON.stringify(user));
+            await env.EMAIL_USER.delete(entry.name);
+            console.log(`老用户记录已迁移为小写键: ${entry.name} -> user:${normalized}`);
+            return user;
+        }
+    } catch (e) {
+        console.error('查找老用户记录失败:', e);
+    }
+    return null;
 }
 
 export async function createUser(
@@ -150,10 +181,9 @@ export function isUserConfirmed(user: User): boolean {
 }
 
 export async function userExists(env: Env, email: string): Promise<boolean> {
-    const key = normalizeEmail(email);
-    if (!key) return false;
-    const data = await env.EMAIL_USER.get(`user:${key}`);
-    return !!data;
+    // 走 getUser 而不是直接查小写键：老记录可能在大写键上，
+    // 否则会误判为「未注册」，让同一个人重复注册出两条记录。
+    return (await getUser(env, email)) !== null;
 }
 
 /** 修改某个用户的口令散列（管理员面板与用户自助改密共用） */
