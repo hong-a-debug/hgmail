@@ -499,6 +499,88 @@ async function deleteSpam(id) {
     } catch (e) { showToast('删除失败', true); }
 }
 
+// ============================================================
+// 发件人封禁（管理员）
+// ============================================================
+function openBlockModal() {
+    $('blockModal').classList.add('active');
+    loadBlocks();
+}
+
+function closeBlockModal() {
+    $('blockModal').classList.remove('active');
+}
+
+async function loadBlocks() {
+    const box = $('blockList');
+    if (!box) return;
+    box.textContent = '加载中…';
+    try {
+        const resp = await fetch('/admin/blocks');
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {
+            box.textContent = '加载失败：' + (data.error || resp.status);
+            return;
+        }
+        const list = data.blocks || [];
+        if (!list.length) {
+            box.innerHTML = '<div style="color:#999;padding:8px 0;">暂无封禁记录</div>';
+            return;
+        }
+        box.innerHTML = list.map(function (b) {
+            const label = b.type === 'domain'
+                ? '🌐 ' + escapeHtml(b.target)
+                : '📧 ' + escapeHtml(b.target);
+            const reason = b.reason ? ' · ' + escapeHtml(b.reason) : '';
+            const time = b.created_at ? formatTime(b.created_at) : '';
+            return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border:1px solid #eee;border-radius:8px;margin-bottom:6px;gap:8px;">'
+                + '<div style="min-width:0;">'
+                + '<div style="font-weight:600;word-break:break-all;">' + label + '</div>'
+                + '<div style="font-size:11px;color:#999;word-break:break-all;">' + escapeHtml(time + reason) + '</div>'
+                + '</div>'
+                + '<button data-action="removeBlock" data-arg="' + escapeHtml(b.target) + '"'
+                + ' style="padding:4px 12px;background:#fff;color:#e74c3c;border:1px solid #e74c3c;border-radius:6px;cursor:pointer;font-size:12px;white-space:nowrap;">'
+                + '解除</button>'
+                + '</div>';
+        }).join('');
+    } catch (e) { box.textContent = '网络错误'; }
+}
+
+async function addBlock() {
+    const target = ($('blockTarget') ? $('blockTarget').value : '').trim();
+    const reason = ($('blockReason') ? $('blockReason').value : '').trim();
+    if (!target) { showToast('请输入要封禁的邮箱或域名', true); return; }
+    try {
+        const resp = await fetch('/admin/blocks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target, reason })
+        });
+        const data = await resp.json();
+        if (!data.success) { showToast(data.error || '添加失败', true); return; }
+        $('blockTarget').value = '';
+        $('blockReason').value = '';
+        showToast('✅ 已封禁');
+        loadBlocks();
+    } catch (e) { showToast('网络错误', true); }
+}
+
+async function removeBlock(target) {
+    if (!target) return;
+    if (!confirm('确定解除对 ' + target + ' 的封禁？')) return;
+    try {
+        const resp = await fetch('/admin/blocks', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ target })
+        });
+        const data = await resp.json();
+        if (!data.success) { showToast(data.error || '删除失败', true); return; }
+        showToast('已解除封禁');
+        loadBlocks();
+    } catch (e) { showToast('网络错误', true); }
+}
+
 async function changePassword() {
     const currentPassword = $('pwdCurrent').value;
     const newPassword = $('pwdNew').value;
