@@ -24,6 +24,12 @@ import {
     saveAdminSettings,
     sanitizeSenderPrefix,
 } from './admin';
+import {
+    isBlocked,
+    addBlock,
+    removeBlock,
+    listBlocks,
+} from './blocklist';
 
 import template from './template.html';
 import styleCss from './style.css';
@@ -528,6 +534,17 @@ const worker = {
             const parsed = await parseEmail(raw);
 
             const messageId = crypto.randomUUID();
+
+            // —— 封禁检查：放在最前面，被拦的邮件连正文都不入库 ——
+            // 这样既能立刻止损，也避免把垃圾塞进 KV / R2。
+            const blockCheck = await isBlocked(env, parsed.from);
+            if (blockCheck.blocked) {
+                console.log(
+                    `🚫 已拦截来自封禁目标的邮件: from=${parsed.from}, matched=${blockCheck.matched}` +
+                    (blockCheck.reason ? `, reason=${blockCheck.reason}` : '')
+                );
+                return;
+            }
 
             if (parsed.isSpam) {
                 // 这里刻意不用 message.setReject()：拒收会把退信发回给（通常是被伪造的）发件人，
@@ -1103,6 +1120,76 @@ const worker = {
 
             const code = await generateRegCode(env);
             return Response.json({ success: true, regCode: code });
+        }
+
+        // ============================================================
+        // 封禁管理（管理员）
+        // ============================================================
+        if (path === '/admin/blocks' && request.method === 'GET') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
+            if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
+
+            try {
+                const blocks = await listBlocks(env);
+                return Response.json({ success: true, blocks });
+            } catch (error) {
+                console.error('读取封禁列表失败:', error);
+                return Response.json({ success: false, error: '读取失败' }, { status: 500 });
+            }
+        }
+
+        if (path === '/admin/blocks' && request.method === 'POST') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
+            if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
+
+            try {
+                const body = await request.json() as { target?: string; reason?: string };
+                const target = String(body.target || '').trim();
+                const reason = String(body.reason || '').trim();
+                if (!target) {
+                    return Response.json({ success: false, error: '请输入要封禁的邮箱或域名' }, { status: 400 });
+                }
+
+                // 不允许封禁本域，否则会把自己的自动回复/确认邮件也拦掉
+                const selfDomain = normalizeEmail(env.DOMAIN);
+                const lowered = target.toLowerCase().replace(/^@/, '');
+                if (lowered === selfDomain || lowered.endsWith(`@${selfDomain}`)) {
+                    return Response.json({ success: false, error: '不能封禁本域地址' }, { status: 400 });
+                }
+
+                const result = await addBlock(env, target, reason, session.email);
+                if (!result.success) {
+                    return Response.json({ success: false, error: result.error }, { status: 400 });
+                }
+                return Response.json({ success: true, entry: result.entry });
+            } catch (error) {
+                console.error('添加封禁失败:', error);
+                return Response.json({ success: false, error: '添加失败，请稍后重试' }, { status: 500 });
+            }
+        }
+
+        if (path === '/admin/blocks' && request.method === 'DELETE') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
+            if (session.role !== 'admin') return Response.json({ success: false, error: '需要管理员权限' }, { status: 403 });
+
+            try {
+                const body = await request.json() as { target?: string };
+                const target = String(body.target || '').trim();
+                if (!target) {
+                    return Response.json({ success: false, error: '缺少目标' }, { status: 400 });
+                }
+                const result = await removeBlock(env, target);
+                if (!result.success) {
+                    return Response.json({ success: false, error: result.error }, { status: 400 });
+                }
+                return Response.json({ success: true });
+            } catch (error) {
+                console.error('删除封禁失败:', error);
+                return Response.json({ success: false, error: '删除失败，请稍后重试' }, { status: 500 });
+            }
         }
 
         // ============================================================
@@ -1708,4 +1795,3 @@ export default {
         return withSecurityHeaders(await worker.fetch(request, env, ctx));
     },
 };
-
