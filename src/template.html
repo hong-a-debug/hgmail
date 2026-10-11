@@ -159,6 +159,11 @@
                     <button type="button" data-action="openSpamModal" style="padding:8px 16px;background:#667eea;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;">查看隔离区</button>
                 </div>
                 <div class="field">
+                    <label>发件人封禁</label>
+                    <div class="field-hint" style="margin-bottom:6px;">按邮箱或域名拦截指定发件人的来信。</div>
+                    <button type="button" data-action="openBlockModal" style="padding:8px 16px;background:#e74c3c;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;">管理封禁列表</button>
+                </div>
+                <div class="field">
                     <label>修改密码</label>
                     <div class="field-hint" style="margin-bottom:6px;">密码在页面右上角的「🔑 修改密码」里改，所有用户（含管理员）都一样。</div>
                     <button type="button" data-action="openPasswordModal" style="padding:8px 16px;background:#667eea;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;">打开修改密码</button>
@@ -276,6 +281,23 @@
             既不进任何人的收件箱，附件也不会写入 R2。
         </div>
         <div id="spamList" style="font-size:13px;color:#666;">加载中…</div>
+    </div>
+</div>
+
+<!-- ===== 封禁管理弹窗（管理员） ===== -->
+<div class="modal-overlay" id="blockModal">
+    <div class="modal" style="max-width:640px;">
+        <div class="modal-header"><h3>🚫 发件人封禁</h3><button class="modal-close" data-action="closeBlockModal">×</button></div>
+        <div style="font-size:12px;color:#999;margin-bottom:10px;line-height:1.6;">
+            封禁后该邮箱或域名发来的邮件会被直接丢弃（连正文都不入库）。<br />
+            封禁域名会连带拦截其所有子域，例如封禁 <code>example.com</code> 同时拦截 <code>mail.example.com</code>。
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+            <input id="blockTarget" placeholder="邮箱或域名，如 spam@bad.com / bad.com" style="flex:1;" />
+            <input id="blockReason" placeholder="原因（可选）" style="flex:1;" />
+            <button data-action="addBlock" style="padding:8px 16px;background:#e74c3c;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;white-space:nowrap;">封禁</button>
+        </div>
+        <div id="blockList" style="font-size:13px;color:#666;max-height:320px;overflow-y:auto;">加载中…</div>
     </div>
 </div>
 
