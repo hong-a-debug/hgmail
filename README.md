@@ -20,7 +20,7 @@
 
 ## ✨ 功能特性
 
-> 当前版本 **[v2.1.0](https://github.com/hong-a-debug/hgmail/releases/latest)**。
+> 当前版本 **[v2.2.0](https://github.com/hong-a-debug/hgmail/releases/latest)**。
 > 每个版本的完整变更记录见 [Releases](https://github.com/hong-a-debug/hgmail/releases)。
 
 <table>
@@ -40,11 +40,12 @@
 - 管理员可看全部邮件
 - 任何用户都能自己改密码
 
-**🚫 垃圾过滤**
+**🚫 垃圾与封禁**
 - 加权评分 + 变体识别
 - 词边界匹配
 - 白名单保护
 - 命中后隔离保留，不会直接丢弃
+- 支持按邮箱 / 域名封禁发件人
 
 </td>
 <td width="50%">
@@ -82,6 +83,7 @@
 - 正文一律转义后渲染
 - 内嵌脚本会被清理
 - 自动回复有回环防护
+- 发件人黑名单拦截
 
 </td>
 </tr>
@@ -266,6 +268,7 @@ PWA 让你可以把网页"安装"到桌面，像原生软件一样使用。
 Cloudflare Access 会拦截 PWA 资源（`/icon.png`、`/manifest.json`、`/sw.js`），导致图标加载失败，PWA 无法安装。
 
 **解决方法**：
+
 1. Cloudflare Zero Trust → 访问控制 → 应用程序
 2. 删除或禁用保护 `mail.你的域名` 的应用
 3. 或用 Bypass 策略放行这三个路径
@@ -339,6 +342,7 @@ const attachments = [];
 | 附件下载 | 强制 `attachment` + `nosniff`，只有图片/音视频允许内联返回 |
 | 响应头 | 统一附加 CSP、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer` |
 | 发信限制 | 单次收件人上限 50、附件上限 10MB、按用户每日配额 |
+| 发件人封禁 | 在邮件解析完成后、落库前拦截；按邮箱或域名匹配，域名逐级向上（封 `bad.com` 连带所有子域），被拦邮件不写 KV、不落 R2、不推送 |
 
 ### 垃圾邮件过滤
 
@@ -353,6 +357,7 @@ const attachments = [];
 | 中英文区分 | 中文字符权重按 2.5 倍计算 |
 | 白名单优先 | 验证码、注册等邮件不会被拦截 |
 | 命中后处理 | 隔离保留而不是丢弃，见「常见问题」 |
+| 封禁优先级 | 封禁检查先于垃圾判定执行；已封禁发件人的邮件连垃圾评分都不跑 |
 
 ---
 
@@ -409,7 +414,9 @@ const attachments = [];
 | 自动回复开关 | 开启/关闭自动回复 |
 | 站外发信开关 | 限制普通用户只能发给本域地址 |
 | 注册需邮箱确认 | 开启后新用户要先点邮件里的确认链接才能登录 |
-| **开启推送** | 收到新邮件时桌面通知 |
+| 开启推送 | 收到新邮件时桌面通知 |
+| 垃圾邮件隔离区 | 查看被判为垃圾但未过期的邮件，可逐条删除 |
+| 发件人封禁 | 按邮箱或域名拦截指定发件人的来信（KV 前缀 `block:`，上限 2000 条，不允许封本域） |
 
 ---
 
@@ -433,6 +440,9 @@ const attachments = [];
 | `/user/sessions/revoke` | POST | 踢出某个登录设备 | 已登录 |
 | `/admin/spam` | GET | 垃圾邮件隔离区列表 | 管理员 |
 | `/admin/spam/:id` | DELETE | 删除一封隔离邮件 | 管理员 |
+| `/admin/blocks` | GET | 列出全部封禁记录 | 管理员 |
+| `/admin/blocks` | POST | 新增封禁（`{ target, reason? }`） | 管理员 |
+| `/admin/blocks` | DELETE | 解除封禁（`{ target }`） | 管理员 |
 | `/no-login/info` | GET | 未登录用户获取标题 | 任何人 |
 | `/user/info` | GET | 已登录用户获取信息 | 已登录 |
 | `/admin/info` | GET | 管理员获取完整设置 | 管理员 |
@@ -463,6 +473,7 @@ const attachments = [];
 │   ├── auth.ts            # 用户/会话管理 + 口令散列（PBKDF2）
 │   ├── admin.ts           # 管理员设置 + 注册码
 │   ├── attachment.ts      # 附件处理（R2 存储）
+│   ├── blocklist.ts       # 发件人封禁（邮箱 / 域名）
 │   ├── email-parser.ts    # 邮件解析 + 垃圾过滤
 │   ├── resend-client.ts   # Resend 发送封装
 │   ├── utils.ts           # SHA256 工具
@@ -619,9 +630,41 @@ const attachments = [];
 <summary><b>收不到邮件？</b></summary>
 
 检查：
+
 1. Email Routing 是否启用
 2. Catch-all 是否指向 Worker
 3. DNS 记录是否已生效
+
+</details>
+
+<details>
+<summary><b>封禁了某人，还能收到他之前发的邮件吗？</b></summary>
+
+**能。** 封禁只影响**之后**的来信。已经存进 KV 的邮件不受影响，可在收件箱里手动删除。
+
+</details>
+
+<details>
+<summary><b>封禁域名和封禁邮箱有什么区别？</b></summary>
+
+- 封 `bad.com` —— 拦下 `bad.com` 下的**所有**地址，包括子域
+- 封 `spam@bad.com` —— 只拦这一个地址
+
+判断是**从右往左逐级向上**找的：从完整域名开始，一层层往上找封禁记录。所以封 `bad.com` 会同时命中 `a.bad.com`、`mail.bad.com` 等。
+
+</details>
+
+<details>
+<summary><b>把封禁的目标填错了，怎么撤销？</b></summary>
+
+管理面板 → 「发件人封禁」→ 列表里找到那条 → 点「解除」。不需要重启或重新部署。
+
+</details>
+
+<details>
+<summary><b>被封禁的邮件还能找回来吗？</b></summary>
+
+**不能。** 封禁的邮件在 Worker 解析后立即丢弃，不写 KV 也不写 R2，日志里只留一行 `🚫 已拦截来自封禁目标的邮件`。如果只是想暂时不收到某人的邮件，建议先删掉已收的，再封禁。
 
 </details>
 
@@ -646,4 +689,5 @@ MIT
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=hong-a-debug/hgmail&type=date&legend=top-left" />
  </picture>
 </a>
+
 </div>
