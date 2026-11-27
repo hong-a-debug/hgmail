@@ -11,7 +11,7 @@ export function sanitizeSenderPrefix(prefix: string | null | undefined): string 
     const cleaned = String(prefix || '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '');
     return cleaned.slice(0, 64) || 'noreply';
 }
-
+``
 export async function getAdminSettings(env: Env) {
     const title = await env.EMAIL_USER.get('admin:title') || '📧 邮件管理';
     const senderPrefix = await env.EMAIL_USER.get('admin:sender_prefix') || 'noreply';
