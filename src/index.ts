@@ -419,11 +419,10 @@ async function resolveUserListKey(env: Env, email: string): Promise<string> {
         // 只在主键缺失时才扫一遍，避免每打开一次列表就多一次 list 调用
         const current = await env.EMAIL_USER.get(primary);
         if (!current) {
-            const listed = await env.EMAIL_USER.list({ prefix: 'user:', limit: 1000 });
-            for (const entry of listed.keys) {
-                if (!entry.name.endsWith(':list')) continue;
-                const stored = entry.name.slice('user:'.length, -':list'.length);
-                if (normalizeEmail(stored) === normalized) legacyKeys.push(entry.name);
+            for (const name of await listAllKeyNames(env.EMAIL_USER, 'user:')) {
+                if (!name.endsWith(':list')) continue;
+                const stored = name.slice('user:'.length, -':list'.length);
+                if (normalizeEmail(stored) === normalized) legacyKeys.push(name);
             }
         }
     } catch (e) {
@@ -444,6 +443,179 @@ async function resolveUserListKey(env: Env, email: string): Promise<string> {
     }
 
     return primary;
+}
+
+async function listAllKeyNames(kv: KVNamespace, prefix: string): Promise<string[]> {
+    const names: string[] = [];
+    let cursor: string | undefined;
+    do {
+        const page = await kv.list({ prefix, cursor, limit: 1000 });
+        names.push(...page.keys.map(key => key.name));
+        if (!page.list_complete && !page.cursor) {
+            throw new Error(`KV listing returned no cursor for prefix ${prefix}`);
+        }
+        cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+    return names;
+}
+
+async function writeIndexWithRetry(
+    kv: KVNamespace,
+    key: string,
+    entries: MailIndexEntry[]
+): Promise<void> {
+    for (let attempt = 1; attempt <= 5; attempt++) {
+        try {
+            await kv.put(key, JSON.stringify(entries));
+            return;
+        } catch (error) {
+            if (attempt === 5) throw error;
+            console.warn(`账户注销时更新索引失败(${key})，第 ${attempt} 次重试:`, error);
+            await sleep(250 * attempt);
+        }
+    }
+}
+
+async function deleteAccountAttachments(env: Env, messageId: string): Promise<void> {
+    let cursor: string | undefined;
+    do {
+        const page = await env.ATTACHMENTS.list({ prefix: `${messageId}/`, cursor });
+        for (const object of page.objects) await env.ATTACHMENTS.delete(object.key);
+        if (page.truncated && !page.cursor) {
+            throw new Error(`R2 listing returned no cursor for message ${messageId}`);
+        }
+        cursor = page.truncated ? page.cursor : undefined;
+    } while (cursor);
+}
+
+async function purgeAccountMailbox(env: Env, accountEmail: string): Promise<void> {
+    const userListKey = await resolveUserListKey(env, accountEmail);
+    const [userIndex, globalIndex] = await Promise.all([
+        readIndex(env, env.EMAIL_USER, userListKey),
+        readIndex(env, env.EMAIL, '_mail_ids'),
+    ]);
+    const ids = Array.from(new Set([...userIndex, ...globalIndex].map(entry => entry.id)));
+    const deletedIds = new Set<string>();
+    const updatedSummaries = new Map<string, MailIndexEntry>();
+    const sharedOwners = new Set<string>();
+
+    for (let offset = 0; offset < ids.length; offset += 25) {
+        const batch = ids.slice(offset, offset + 25);
+        const records = await Promise.all(batch.map(async id => ({
+            id,
+            data: await env.EMAIL.get(id),
+        })));
+
+        for (const record of records) {
+            if (!record.data) {
+                deletedIds.add(record.id);
+                continue;
+            }
+
+            const mail = safeJsonParse<StoredEmail | null>(record.data, null);
+            if (!mail) throw new Error(`Cannot delete account: mail ${record.id} is corrupted`);
+
+            const recipients = new Set<string>();
+            for (const recipient of mail.recipients || []) {
+                const normalized = normalizeEmail(recipient);
+                if (normalized) recipients.add(normalized);
+            }
+            for (const part of String(mail.to || '').split(',')) {
+                const address = extractAddress(part);
+                if (address) recipients.add(address);
+            }
+            if (!recipients.has(accountEmail)) continue;
+
+            recipients.delete(accountEmail);
+            if (recipients.size === 0) {
+                await deleteAccountAttachments(env, record.id);
+                await env.EMAIL.delete(record.id);
+                deletedIds.add(record.id);
+                continue;
+            }
+
+            const remaining = Array.from(recipients);
+            mail.recipients = remaining;
+            if (!remaining.includes(extractAddress(mail.to))) mail.to = remaining[0];
+            await env.EMAIL.put(record.id, JSON.stringify(mail), { expirationTtl: MAIL_TTL_SECONDS });
+            updatedSummaries.set(record.id, mailSummary(mail));
+            for (const owner of remaining) sharedOwners.add(owner);
+        }
+    }
+
+    const nextGlobalIndex = globalIndex
+        .filter(entry => !deletedIds.has(entry.id))
+        .map(entry => updatedSummaries.get(entry.id) || entry);
+    if (nextGlobalIndex.length !== globalIndex.length
+        || nextGlobalIndex.some((entry, index) => entry !== globalIndex[index])) {
+        await writeIndexWithRetry(env.EMAIL, '_mail_ids', nextGlobalIndex);
+    }
+
+    for (const owner of sharedOwners) {
+        const ownerListKey = await resolveUserListKey(env, owner);
+        const ownerIndex = await readIndex(env, env.EMAIL_USER, ownerListKey);
+        const nextOwnerIndex = ownerIndex
+            .filter(entry => !deletedIds.has(entry.id))
+            .map(entry => updatedSummaries.get(entry.id) || entry);
+        if (nextOwnerIndex.length !== ownerIndex.length
+            || nextOwnerIndex.some((entry, index) => entry !== ownerIndex[index])) {
+            await writeIndexWithRetry(env.EMAIL_USER, ownerListKey, nextOwnerIndex);
+        }
+    }
+}
+
+async function deleteAccountKvData(env: Env, accountEmail: string): Promise<void> {
+    for (const name of await listAllKeyNames(env.EMAIL_USER, 'session:')) {
+        const sessionId = name.slice('session:'.length);
+        const session = await getSession(env, sessionId);
+        if (session && normalizeEmail(session.email) === accountEmail) {
+            await env.EMAIL_USER.delete(name);
+        }
+    }
+
+    for (const prefix of ['reset:', 'confirm:']) {
+        for (const name of await listAllKeyNames(env.EMAIL_USER, prefix)) {
+            const raw = await env.EMAIL_USER.get(name);
+            const record = safeJsonParse<{ email?: string } | null>(raw, null);
+            if (record && normalizeEmail(record.email) === accountEmail) {
+                await env.EMAIL_USER.delete(name);
+            }
+        }
+    }
+
+    for (const prefix of ['push:', 'push_failed:', 'reset_req:']) {
+        for (const name of await listAllKeyNames(env.EMAIL_USER, prefix)) {
+            if (normalizeEmail(name.slice(prefix.length)) === accountEmail) {
+                await env.EMAIL_USER.delete(name);
+            }
+        }
+    }
+
+    for (const name of await listAllKeyNames(env.EMAIL_USER, 'send_quota:')) {
+        if (name.startsWith(`send_quota:${accountEmail}:`)) {
+            await env.EMAIL_USER.delete(name);
+        }
+    }
+
+    for (const name of await listAllKeyNames(env.EMAIL_USER, 'user:')) {
+        const value = name.slice('user:'.length);
+        const isList = value.endsWith(':list');
+        const owner = isList ? value.slice(0, -':list'.length) : value;
+        if (normalizeEmail(owner) === accountEmail) {
+            await env.EMAIL_USER.delete(name);
+        }
+    }
+}
+
+async function hasOtherAdmin(env: Env, accountEmail: string): Promise<boolean> {
+    for (const name of await listAllKeyNames(env.EMAIL_USER, 'user:')) {
+        const value = name.slice('user:'.length);
+        if (value.endsWith(':list')) continue;
+        const raw = await env.EMAIL_USER.get(name);
+        const user = safeJsonParse<{ email?: string; role?: string } | null>(raw, null);
+        if (user?.role === 'admin' && normalizeEmail(user.email || value) !== accountEmail) return true;
+    }
+    return false;
 }
 
 /** 自动回复前的回环 / backscatter 防护 */
@@ -1092,6 +1264,50 @@ const worker = {
             } catch (error) {
                 console.error('修改密码失败:', error);
                 return Response.json({ success: false, error: '修改失败，请稍后重试' }, { status: 500 });
+            }
+        }
+
+        // ============================================================
+        // 注销当前账户（要求重新验证密码）
+        // ============================================================
+        if (path === '/user/delete' && request.method === 'POST') {
+            const session = await getSessionFromCookie();
+            if (!session) return Response.json({ success: false, error: '未登录' }, { status: 401 });
+
+            try {
+                const body = await request.json() as { currentPassword?: string; confirmation?: string };
+                const currentPassword = String(body.currentPassword || '');
+                const confirmation = String(body.confirmation || '').trim();
+                if (!currentPassword) {
+                    return Response.json({ success: false, error: '请输入当前密码' }, { status: 400 });
+                }
+                if (confirmation !== '注销') {
+                    return Response.json({ success: false, error: '确认文字不正确' }, { status: 400 });
+                }
+
+                const accountEmail = normalizeEmail(session.email);
+                const user = await getUser(env, accountEmail);
+                if (!user) return Response.json({ success: false, error: '用户不存在' }, { status: 404 });
+
+                const check = await verifyPassword(currentPassword, user.password_hash);
+                if (!check.ok) {
+                    return Response.json({ success: false, error: '当前密码不正确' }, { status: 400 });
+                }
+                if (user.role === 'admin' && !await hasOtherAdmin(env, accountEmail)) {
+                    return Response.json(
+                        { success: false, error: '唯一管理员不能注销，请先确保系统还有其他管理员' },
+                        { status: 409 }
+                    );
+                }
+
+                await purgeAccountMailbox(env, accountEmail);
+                await deleteAccountKvData(env, accountEmail);
+                return Response.json({ success: true }, {
+                    headers: { 'Set-Cookie': sessionCookie('', 0) }
+                });
+            } catch (error) {
+                console.error('注销账户失败:', error);
+                return Response.json({ success: false, error: '注销失败，请稍后重试' }, { status: 500 });
             }
         }
 

@@ -630,6 +630,61 @@ async function changePassword() {
     }
 }
 
+function openAccountDeleteModal() {
+    $('deleteAccountPassword').value = '';
+    $('deleteAccountConfirmation').value = '';
+    hideError('deleteAccountError');
+    $('deleteAccountModal').classList.add('active');
+}
+
+function closeAccountDeleteModal() {
+    $('deleteAccountModal').classList.remove('active');
+}
+
+async function deleteAccount() {
+    const currentPassword = $('deleteAccountPassword').value;
+    const confirmation = $('deleteAccountConfirmation').value.trim();
+    if (!currentPassword) {
+        showError('deleteAccountError', '请输入当前密码');
+        return;
+    }
+    if (confirmation !== '注销') {
+        showError('deleteAccountError', '请输入“注销”确认');
+        return;
+    }
+
+    hideError('deleteAccountError');
+    const button = $('deleteAccountBtn');
+    button.disabled = true;
+    try {
+        const resp = await fetch('/user/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ currentPassword, confirmation })
+        });
+        const data = await resp.json();
+        if (!data.success) {
+            showError('deleteAccountError', data.error || '注销失败');
+            return;
+        }
+
+        if (refreshInterval) { clearInterval(refreshInterval); refreshInterval = null; }
+        sessionStorage.removeItem('pendingMailto');
+        mails = [];
+        $('mainApp').style.display = 'none';
+        $('loginEmail').value = '';
+        $('loginPassword').value = '';
+        closeAccountDeleteModal();
+        closePasswordModal();
+        showLogin();
+        showToast('账户及个人收件箱已注销');
+    } catch (e) {
+        showError('deleteAccountError', '网络错误，请重试');
+    } finally {
+        button.disabled = false;
+    }
+}
+
 // ============================================================
 // 生成注册码
 // ============================================================

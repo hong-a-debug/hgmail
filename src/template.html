@@ -19,7 +19,7 @@
     <link rel="manifest" href="/manifest.json" />
 
     <!-- ===== 样式 ===== -->
-    <link rel="stylesheet" href="/style.css?v=11" />
+    <link rel="stylesheet" href="/style.css?v=12" />
 </head>
 <body>
 
@@ -275,6 +275,29 @@
             </div>
             <div id="sessionList" style="margin-top:8px;font-size:13px;color:#666;">加载中…</div>
         </div>
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid #eee;">
+            <strong style="font-size:14px;color:#c62828;">注销账户</strong>
+            <div style="font-size:12px;color:#999;margin:6px 0 10px;line-height:1.6;">
+                将永久删除账户、登录设备和推送设置。只发给你的邮件及附件会删除；多人邮件会为其他收件人保留。此操作不能撤销。
+            </div>
+            <button class="page-btn" style="color:#c62828;border-color:#e8b4b4;" data-action="openAccountDeleteModal">注销账户</button>
+        </div>
+    </div>
+</div>
+
+<!-- ===== 注销账户确认 ===== -->
+<div class="modal-overlay" id="deleteAccountModal">
+    <div class="modal" style="max-width:420px;">
+        <div class="modal-header"><h3 style="color:#c62828;">注销账户</h3><button class="modal-close" data-action="closeAccountDeleteModal">×</button></div>
+        <div id="deleteAccountError" style="color:#c62828;display:none;font-size:13px;margin:8px 0;"></div>
+        <div style="font-size:13px;color:#666;line-height:1.6;">
+            账户和仅发给你的邮件将被永久删除。为确认是你本人操作，请输入当前密码，并在下方输入“注销”。
+        </div>
+        <label>当前密码</label>
+        <input id="deleteAccountPassword" type="password" autocomplete="current-password" />
+        <label>输入“注销”确认</label>
+        <input id="deleteAccountConfirmation" type="text" autocomplete="off" />
+        <button id="deleteAccountBtn" class="send-btn" style="margin-top:16px;background:#c62828;" data-action="deleteAccount">永久注销</button>
     </div>
 </div>
 
@@ -313,6 +336,6 @@
 <!-- 带版本号：浏览器里可能还留着旧的 no-cache 之前的 app.js 缓存，
      换 URL 可以直接绕开，避免「旧前端 + 新后端」导致登录失败。
      以后改动 app.js 只要把这个 v= 的值加一即可。 -->
-<script src="/app.js?v=11"></script>
+<script src="/app.js?v=12"></script>
 </body>
 </html>
