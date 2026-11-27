@@ -43,6 +43,8 @@ export interface MailIndexEntry {
 
 export interface User {
     email: string;
+    /** 可选的密码找回邮箱；空字符串表示新用户未设置。 */
+    recovery_email?: string;
     password_hash: string;
     role: 'admin' | 'user';
     created_at: string;

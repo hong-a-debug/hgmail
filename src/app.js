@@ -95,7 +95,7 @@ function showResetRequest() {
     $('registerPage').style.display = 'none';
     $('resetPage').style.display = 'flex';
     hideError('resetError');
-    $('resetMsg').textContent = '输入注册时用的邮箱，我们会发一封带重置链接的邮件。';
+    $('resetMsg').textContent = '输入注册时使用的登录邮箱；重置链接会发送到你填写的找回邮箱。';
     $('resetRequestBlock').style.display = 'block';
     $('resetConfirmBlock').style.display = 'none';
 }
@@ -125,7 +125,7 @@ async function requestReset() {
         const data = await resp.json();
         if (!data.success) { showError('resetError', data.error || '请求失败'); return; }
         // 服务端对「账号存在与否」返回同样的结果，这里也不做区分
-        $('resetMsg').textContent = '如果这个邮箱已注册，重置链接已经发出，请查收（30 分钟内有效）。';
+        $('resetMsg').textContent = '如果账号已设置找回邮箱，重置链接已发送（30 分钟内有效）；未填写找回邮箱的账号无法通过邮件找回。';
     } catch (e) { showError('resetError', '网络错误，请重试'); }
 }
 
@@ -216,6 +216,7 @@ async function login() {
 // ============================================================
 async function register() {
     const prefix = $('regPrefix').value.trim();
+    const recoveryEmail = $('regRecoveryEmail').value.trim();
     const password = $('regPassword').value;
     const regCode = $('regCode').value.trim().toUpperCase();
 
@@ -225,6 +226,10 @@ async function register() {
     }
     if (password.length < 6) {
         showError('regError', '密码至少 6 位');
+        return;
+    }
+    if (recoveryEmail && !/^[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,190}\.[a-z]{2,24}$/i.test(recoveryEmail)) {
+        showError('regError', '找回邮箱格式不正确');
         return;
     }
     hideError('regError');
@@ -239,7 +244,7 @@ async function register() {
         const resp = await fetch('/register', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ prefix, password, regCode })
+            body: JSON.stringify({ prefix, recoveryEmail, password, regCode })
         });
         const data = await resp.json();
         if (!data.success) {
@@ -250,6 +255,7 @@ async function register() {
         showLogin();
         $('loginEmail').value = data.email || `${prefix}@${$('registerDomain').textContent}`;
         $('regPrefix').value = '';
+        $('regRecoveryEmail').value = '';
         $('regPassword').value = '';
     } catch (e) {
         showError('regError', '网络错误，请重试');

@@ -152,11 +152,13 @@ export async function createUser(
     email: string,
     passwordHash: string,
     role: 'admin' | 'user' = 'user',
-    confirmed = true
+    confirmed = true,
+    recoveryEmail?: string
 ): Promise<User> {
     const key = normalizeEmail(email);
     const user: User = {
         email: key,
+        recovery_email: recoveryEmail === undefined ? undefined : normalizeEmail(recoveryEmail),
         password_hash: passwordHash,
         role,
         created_at: new Date().toISOString(),

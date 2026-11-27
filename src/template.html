@@ -19,7 +19,7 @@
     <link rel="manifest" href="/manifest.json" />
 
     <!-- ===== 样式 ===== -->
-    <link rel="stylesheet" href="/style.css?v=10" />
+    <link rel="stylesheet" href="/style.css?v=11" />
 </head>
 <body>
 
@@ -63,10 +63,12 @@
         <div id="regError" class="auth-error"></div>
         <div id="regHint" class="auth-hint"></div>
         <div style="display:flex;align-items:center;gap:4px;margin-bottom:12px;">
-            <input id="regPrefix" type="text" placeholder="邮箱前缀（如 alice）" maxlength="64" autocomplete="username" autocapitalize="off" spellcheck="false" style="flex:1;min-width:0;margin-bottom:0;" />
+            <input id="regPrefix" type="text" placeholder="登录邮箱前缀（如 alice）" maxlength="64" autocomplete="username" autocapitalize="off" spellcheck="false" style="flex:1;min-width:0;margin-bottom:0;" />
             <span style="color:#999;">@</span>
             <span id="registerDomain" style="color:#666;font-size:14px;"></span>
         </div>
+        <input id="regRecoveryEmail" type="email" placeholder="找回邮箱（选填）" autocomplete="email" />
+        <div style="margin:-6px 0 12px;color:#999;font-size:12px;">不填写将无法通过邮件找回密码。</div>
         <input id="regPassword" type="password" placeholder="密码" />
         <input id="regCode" placeholder="注册码（第一个用户留空）" style="text-transform:uppercase;" />
         <button class="auth-btn" data-action="register">注册</button>
@@ -311,6 +313,6 @@
 <!-- 带版本号：浏览器里可能还留着旧的 no-cache 之前的 app.js 缓存，
      换 URL 可以直接绕开，避免「旧前端 + 新后端」导致登录失败。
      以后改动 app.js 只要把这个 v= 的值加一即可。 -->
-<script src="/app.js?v=10"></script>
+<script src="/app.js?v=11"></script>
 </body>
 </html>

@@ -756,11 +756,18 @@ const worker = {
         // ============================================================
         if (path === '/register' && request.method === 'POST') {
             try {
-                const body = await request.json() as { email?: string; prefix?: string; password?: string; regCode?: string };
+                const body = await request.json() as {
+                    email?: string;
+                    prefix?: string;
+                    recoveryEmail?: string;
+                    password?: string;
+                    regCode?: string;
+                };
                 const prefix = typeof body.prefix === 'string' ? body.prefix.trim().toLowerCase() : null;
                 const email = prefix !== null
                     ? normalizeEmail(`${prefix}@${env.DOMAIN}`)
                     : normalizeEmail(body.email);
+                const recoveryEmail = normalizeEmail(body.recoveryEmail);
                 const password = String(body.password || '');
                 const regCode = String(body.regCode || '').trim();
 
@@ -769,6 +776,9 @@ const worker = {
                 }
                 if (!isValidEmailAddress(email)) {
                     return Response.json({ success: false, error: '邮箱格式不正确' }, { status: 400 });
+                }
+                if (recoveryEmail && !isValidEmailAddress(recoveryEmail)) {
+                    return Response.json({ success: false, error: '找回邮箱格式不正确' }, { status: 400 });
                 }
                 if (password.length < 6) {
                     return Response.json({ success: false, error: '密码至少 6 位' }, { status: 400 });
@@ -805,7 +815,7 @@ const worker = {
                     && !!env.RESEND_API_KEY
                     && (await env.EMAIL_USER.get('admin:require_confirm') === 'true');
 
-                await createUser(env, email, await hashPassword(password), role, !needsConfirm);
+                await createUser(env, email, await hashPassword(password), role, !needsConfirm, recoveryEmail);
 
                 if (role === 'admin') {
                     await setAdminExists(env, true);
@@ -892,8 +902,11 @@ const worker = {
                 }
 
                 const user = await getUser(env, email);
+                const recoveryEmail = user
+                    ? (user.recovery_email === undefined ? user.email : normalizeEmail(user.recovery_email))
+                    : '';
                 // 账号存在与否都返回同样的结果，避免被拿来枚举注册邮箱
-                if (user) {
+                if (user && recoveryEmail) {
                     const token = (crypto.randomUUID() + crypto.randomUUID()).replace(/-/g, '');
                     await env.EMAIL_USER.put(
                         `reset:${token}`,
@@ -906,7 +919,7 @@ const worker = {
                     await sendEmail(
                         env.RESEND_API_KEY,
                         `${prefix}@${env.DOMAIN}`,
-                        email,
+                        recoveryEmail,
                         '重置你的登录密码',
                         `<div style="font-family:sans-serif;max-width:560px;line-height:1.7;">
                             <p>我们收到了重置这个邮箱登录密码的请求。</p>
